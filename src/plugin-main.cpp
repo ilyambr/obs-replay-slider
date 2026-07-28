@@ -22,12 +22,11 @@ void obs_module_post_load(void)
 		return;
 
 	auto *dock = new ReplayBufferDock(mainWindow);
-	obs_frontend_add_dock(dock);
+	obs_frontend_add_dock_by_id("ReplayBufferDock", obs_module_text("ReplayBufferDock"), dock);
 }
 
 void obs_module_unload(void)
 {
-	// obs_frontend_add_dock() hands ownership to the main window's Qt object tree,
-	// so it will be destroyed along with everything else on shutdown; nothing to do here.
+	obs_frontend_remove_dock("ReplayBufferDock");
 	obs_log(LOG_INFO, "plugin unloaded");
 }
