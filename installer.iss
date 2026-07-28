@@ -39,7 +39,14 @@ SetupIconFile=media\icon.ico
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Files]
-Source: "release\{#ConfigDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; The CMake build produces the modern self-contained plugin layout
+; (replay-slider\bin\64bit\replay-slider.dll, replay-slider\data\*), but a
+; system-wide "Program Files\obs-studio" install (like real OBS's own
+; obs-plugins/data layout) expects the classic flat layout instead, so remap
+; it here rather than dumping the nested folder as-is.
+Source: "release\{#ConfigDir}\replay-slider\bin\64bit\replay-slider.dll"; DestDir: "{app}\obs-plugins\64bit"; Flags: ignoreversion
+Source: "release\{#ConfigDir}\replay-slider\bin\64bit\replay-slider.pdb"; DestDir: "{app}\obs-plugins\64bit"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "release\{#ConfigDir}\replay-slider\data\*"; DestDir: "{app}\data\obs-plugins\replay-slider"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; NOTE: Don't use "Flags: ignoreversion" on any shared system files
 
 [Icons]

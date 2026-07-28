@@ -59,13 +59,28 @@ function Package {
     Remove-Item @RemoveArgs
 
     Log-Group "Archiving ${ProductName}..."
+    # The CMake build produces the modern self-contained plugin layout
+    # (${ProductName}\bin\64bit\${ProductName}.dll, ${ProductName}\data\*).
+    # Remap it to the classic flat layout (obs-plugins/64bit, data/obs-plugins/<name>)
+    # so the zip can be extracted directly into a "Program Files\obs-studio"-style
+    # install, matching real OBS's own layout and every other installed plugin.
+    $StagingDir = "${ProjectRoot}/release/${OutputName}-staging"
+    Remove-Item -Path $StagingDir -Recurse -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Path "${StagingDir}/obs-plugins/64bit" -Force | Out-Null
+    New-Item -ItemType Directory -Path "${StagingDir}/data/obs-plugins/${ProductName}" -Force | Out-Null
+
+    $BuiltPluginDir = "${ProjectRoot}/release/${Configuration}/${ProductName}"
+    Copy-Item -Path "${BuiltPluginDir}/bin/64bit/*" -Destination "${StagingDir}/obs-plugins/64bit" -Recurse
+    Copy-Item -Path "${BuiltPluginDir}/data/*" -Destination "${StagingDir}/data/obs-plugins/${ProductName}" -Recurse
+
     $CompressArgs = @{
-        Path = (Get-ChildItem -Path "${ProjectRoot}/release/${Configuration}" -Exclude "${OutputName}*.*")
+        Path = (Get-ChildItem -Path $StagingDir)
         CompressionLevel = 'Optimal'
         DestinationPath = "${ProjectRoot}/release/${OutputName}.zip"
         Verbose = ($Env:CI -ne $null)
     }
     Compress-Archive -Force @CompressArgs
+    Remove-Item -Path $StagingDir -Recurse -ErrorAction SilentlyContinue
     Log-Group
 
     $IsccPath = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
