@@ -23,6 +23,14 @@ struct ReplayRow {
 	QLabel *valueLabel = nullptr;
 	QLabel *statusDot = nullptr;
 	QLabel *hotkeyLabel = nullptr;
+
+	// Source Record force-restarts its replay output (losing whatever was
+	// already buffered) whenever "replay_duration" changes while active --
+	// there's no way to resize a running buffer. So while a filter row is
+	// active, a released slider value is held here instead of applied
+	// immediately, and only pushed once the buffer is no longer active.
+	bool lastKnownActive = false;
+	int pendingDurationSeconds = -1;
 };
 
 // Dock showing one row per replay buffer found (the built-in OBS replay buffer,

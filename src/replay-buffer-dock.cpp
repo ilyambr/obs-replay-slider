@@ -249,10 +249,14 @@ int ReplayBufferDock::AddRow(bool isMain, const QString &key, const QString &lab
 		if (idx < 0)
 			return;
 		const int seconds = rows[idx].slider->value();
-		if (rowIsMain)
+		if (rowIsMain) {
 			ApplyMainDuration(seconds);
-		else
+		} else if (rows[idx].lastKnownActive) {
+			// Don't disturb a running buffer; apply once it's no longer active.
+			rows[idx].pendingDurationSeconds = seconds;
+		} else {
 			ApplyFilterDuration(rows[idx].filterWeak, seconds);
+		}
 	});
 
 	return index;
@@ -381,23 +385,15 @@ void ReplayBufferDock::UpdateFilterRow(ReplayRow &row)
 		return;
 	}
 
-	if (!row.slider->isSliderDown()) {
-		obs_data_t *settings = obs_source_get_settings(strong);
-		const int seconds = ClampDuration((int)obs_data_get_int(settings, "replay_duration"));
-		obs_data_release(settings);
-		if (row.slider->value() != seconds)
-			row.slider->setValue(seconds);
-		row.valueLabel->setText(FormatDuration(seconds));
-	}
-
 	int state = 0;
+	bool active = false;
 	QString hotkey;
 	proc_handler_t *ph = obs_source_get_proc_handler(strong);
 	if (ph) {
 		calldata_t cd;
 		calldata_init(&cd);
 		if (proc_handler_call(ph, "get_replay_buffer_status", &cd)) {
-			const bool active = calldata_bool(&cd, "active");
+			active = calldata_bool(&cd, "active");
 			const bool error = calldata_bool(&cd, "error");
 			const char *hk = calldata_string(&cd, "hotkey");
 			hotkey = hk ? QString::fromUtf8(hk) : QString();
@@ -407,6 +403,31 @@ void ReplayBufferDock::UpdateFilterRow(ReplayRow &row)
 	}
 	SetStatusDot(row.statusDot, state);
 	row.hotkeyLabel->setText(hotkey.isEmpty() ? QString::fromUtf8(obs_module_text("Unbound")) : hotkey);
+
+	if (row.pendingDurationSeconds >= 0 && !active) {
+		// No longer active: safe to push the held duration change now.
+		ApplyFilterDuration(row.filterWeak, row.pendingDurationSeconds);
+		row.pendingDurationSeconds = -1;
+		row.valueLabel->setToolTip(QString());
+	}
+	row.lastKnownActive = active;
+
+	if (!row.slider->isSliderDown()) {
+		int seconds;
+		if (row.pendingDurationSeconds >= 0) {
+			// Still active: show the held value rather than the live (unchanged) setting.
+			seconds = row.pendingDurationSeconds;
+			row.valueLabel->setToolTip(
+				QString::fromUtf8(obs_module_text("PendingDurationTooltip")));
+		} else {
+			obs_data_t *settings = obs_source_get_settings(strong);
+			seconds = ClampDuration((int)obs_data_get_int(settings, "replay_duration"));
+			obs_data_release(settings);
+		}
+		if (row.slider->value() != seconds)
+			row.slider->setValue(seconds);
+		row.valueLabel->setText(FormatDuration(seconds));
+	}
 
 	obs_source_release(strong);
 }
