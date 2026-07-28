@@ -1,6 +1,7 @@
 #include "replay-buffer-dock.hpp"
 #include "hotkey-lookup.hpp"
 
+#include <obs-module.h>
 #include <util/config-file.h>
 
 #include <QVBoxLayout>
@@ -296,7 +297,9 @@ void ReplayBufferDock::RefreshAll()
 			obs_weak_source_release(weak);
 			continue;
 		}
-		const QString key = QString::fromUtf8(obs_source_get_uuid(strong));
+		// Not all OBS versions this plugin targets have obs_source_get_uuid(), so use the
+		// source object's own (stable-for-its-lifetime) address as the identity key instead.
+		const QString key = QString::number(reinterpret_cast<quintptr>(strong), 16);
 		obs_source_release(strong);
 		if (discoveredMap.contains(key)) {
 			obs_weak_source_release(weak);

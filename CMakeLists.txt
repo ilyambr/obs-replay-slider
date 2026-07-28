@@ -16,6 +16,7 @@ set(MACOS_INSTALLER_UUID "8A3D2F73-7FAB-4D8C-AD6E-7B3D7FAD7C3D")
 add_library(${PROJECT_NAME} MODULE)
 
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/version.h.in ${CMAKE_CURRENT_SOURCE_DIR}/version.h)
+target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 target_sources(${PROJECT_NAME} PRIVATE
 	src/plugin-main.cpp
