@@ -32,7 +32,9 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
 	CXX_STANDARD_REQUIRED ON)
 
 find_package(Qt6 REQUIRED COMPONENTS Widgets Core)
-target_link_libraries(${PROJECT_NAME} PRIVATE Qt6::Core Qt6::Widgets)
+target_link_libraries(${PROJECT_NAME}
+	Qt6::Core
+	Qt6::Widgets)
 
 if(BUILD_OUT_OF_TREE)
 	find_package(libobs REQUIRED)
