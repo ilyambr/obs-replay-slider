@@ -122,15 +122,20 @@ ReplayBufferDock::ReplayBufferDock(QWidget *parent) : QFrame(parent)
 	scrollArea->setWidget(content);
 	outerLayout->addWidget(scrollArea);
 
-	ReacquireMainOutput();
-
 	refreshTimer = new QTimer(this);
 	connect(refreshTimer, &QTimer::timeout, this, &ReplayBufferDock::RefreshAll);
 	refreshTimer->start(1000);
 
 	obs_frontend_add_event_callback(FrontendEventCallback, this);
 
-	RefreshAll();
+	// obs_module_post_load() (where this dock is constructed) fires very early
+	// in OBS's startup, before the frontend's replay-buffer-output machinery is
+	// necessarily ready -- touching it synchronously here can crash. Defer the
+	// first real query to just after the event loop goes idle.
+	QTimer::singleShot(0, this, [this]() {
+		ReacquireMainOutput();
+		RefreshAll();
+	});
 }
 
 ReplayBufferDock::~ReplayBufferDock()
