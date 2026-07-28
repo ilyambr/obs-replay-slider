@@ -2,15 +2,12 @@
 #include <obs-frontend-api.h>
 
 #include <QMainWindow>
-#include <QPointer>
 
 #include "replay-buffer-dock.hpp"
 #include "version.h"
 
 OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE("replay-slider", "en-US")
-
-static QPointer<ReplayBufferDock> replayBufferDock;
 
 MODULE_EXPORT const char *obs_module_description(void)
 {
@@ -31,14 +28,12 @@ void obs_module_post_load(void)
 		return;
 
 	auto *dock = new ReplayBufferDock(mainWindow);
-	obs_frontend_add_dock_by_id("ReplayBufferDock", obs_module_text("ReplayBufferDock"), dock);
-	replayBufferDock = dock;
+	obs_frontend_add_dock(dock);
 }
 
 void obs_module_unload(void)
 {
-	if (replayBufferDock)
-		obs_frontend_remove_dock("ReplayBufferDock");
-
+	// obs_frontend_add_dock() hands ownership to the main window's Qt object tree,
+	// so it will be destroyed along with everything else on shutdown; nothing to do here.
 	blog(LOG_INFO, "[Replay Slider] unloaded");
 }

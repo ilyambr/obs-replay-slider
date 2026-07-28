@@ -3,7 +3,7 @@
 #include <obs.h>
 #include <obs-frontend-api.h>
 
-#include <QFrame>
+#include <QDockWidget>
 #include <QVector>
 #include <QMap>
 #include <QString>
@@ -29,7 +29,7 @@ struct ReplayRow {
 // plus every "source_record_filter" instance that has its own replay buffer) --
 // a duration slider (30s-15min), a green/grey/red status dot, and the bound
 // "Save Replay" hotkey for each.
-class ReplayBufferDock : public QFrame {
+class ReplayBufferDock : public QDockWidget {
 	Q_OBJECT
 
 public:

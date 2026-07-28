@@ -4,7 +4,6 @@
 #include <obs-module.h>
 #include <util/config-file.h>
 
-#include <QVBoxLayout>
 #include <QGridLayout>
 #include <QScrollArea>
 #include <QSlider>
@@ -106,12 +105,10 @@ void MainReplayStoppedSignalCallback(void *data, calldata_t *cd)
 
 } // namespace
 
-ReplayBufferDock::ReplayBufferDock(QWidget *parent) : QFrame(parent)
+ReplayBufferDock::ReplayBufferDock(QWidget *parent) : QDockWidget(parent)
 {
 	setObjectName(QStringLiteral("ReplayBufferDock"));
-
-	auto *outerLayout = new QVBoxLayout(this);
-	outerLayout->setContentsMargins(0, 0, 0, 0);
+	setWindowTitle(QString::fromUtf8(obs_module_text("ReplayBufferDock")));
 
 	auto *content = new QWidget(this);
 	grid = new QGridLayout(content);
@@ -120,7 +117,7 @@ ReplayBufferDock::ReplayBufferDock(QWidget *parent) : QFrame(parent)
 	auto *scrollArea = new QScrollArea(this);
 	scrollArea->setWidgetResizable(true);
 	scrollArea->setWidget(content);
-	outerLayout->addWidget(scrollArea);
+	setWidget(scrollArea);
 
 	ReacquireMainOutput();
 
