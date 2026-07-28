@@ -67,6 +67,18 @@ function Package {
     }
     Compress-Archive -Force @CompressArgs
     Log-Group
+
+    $IsccPath = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+    if ( ( Test-Path -Path $IsccPath ) -and ( Test-Path -Path "${ProjectRoot}/installer.iss" ) ) {
+        Log-Group "Building installer for ${ProductName}..."
+        & $IsccPath /Qp "/DMyAppVersion=${ProductVersion}" "/DConfigDir=${Configuration}" "${ProjectRoot}/installer.iss"
+        if ( $LASTEXITCODE -ne 0 ) {
+            throw "ISCC.exe failed with exit code ${LASTEXITCODE}"
+        }
+        Log-Group
+    } else {
+        Write-Warning "Inno Setup or installer.iss not found -- skipping installer creation."
+    }
 }
 
 Package

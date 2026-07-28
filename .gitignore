@@ -6,6 +6,7 @@
 !/build-aux
 !/cmake
 !/data
+!/media
 !/src
 !.clang-format
 !.gersemirc
@@ -13,6 +14,7 @@
 !buildspec.json
 !CMakeLists.txt
 !CMakePresets.json
+!installer.iss
 !LICENSE
 !README.md
 
