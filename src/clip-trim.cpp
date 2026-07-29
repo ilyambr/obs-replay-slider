@@ -61,7 +61,9 @@ bool TrimReplayToLastSeconds(const std::string &path, int seconds)
 	const std::string tempPath = path + ".trimtmp";
 
 	OutputGuard out;
-	avformat_alloc_output_context2(&out.ctx, nullptr, nullptr, tempPath.c_str());
+	// Guess the container from the real path's extension -- tempPath ends in
+	// ".trimtmp", which libavformat can't map to a format on its own.
+	avformat_alloc_output_context2(&out.ctx, nullptr, nullptr, path.c_str());
 	if (!out.ctx)
 		return false;
 
