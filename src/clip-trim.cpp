@@ -9,7 +9,46 @@ extern "C" {
 #include <cstdio>
 #include <vector>
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
+
 namespace {
+
+#ifdef _WIN32
+std::wstring Utf8ToWide(const std::string &s)
+{
+	if (s.empty())
+		return std::wstring();
+	int len = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), static_cast<int>(s.size()), nullptr, 0);
+	std::wstring result(static_cast<size_t>(len), 0);
+	MultiByteToWideChar(CP_UTF8, 0, s.c_str(), static_cast<int>(s.size()), result.data(), len);
+	return result;
+}
+
+// CRT rename() refuses to overwrite an existing destination on Windows, unlike
+// POSIX. MoveFileExW with MOVEFILE_REPLACE_EXISTING does the atomic replace
+// directly and needs no separate remove() step (which can itself transiently
+// fail with a sharing violation right after another process just wrote the
+// file, e.g. antivirus/indexer scans, OBS's own muxer closing its handle).
+bool ReplaceFile(const std::string &tempPath, const std::string &path)
+{
+	const std::wstring wTemp = Utf8ToWide(tempPath);
+	const std::wstring wPath = Utf8ToWide(path);
+	for (int attempt = 0; attempt < 10; attempt++) {
+		if (MoveFileExW(wTemp.c_str(), wPath.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+			return true;
+		Sleep(200);
+	}
+	return false;
+}
+#else
+bool ReplaceFile(const std::string &tempPath, const std::string &path)
+{
+	return rename(tempPath.c_str(), path.c_str()) == 0;
+}
+#endif
 
 struct InputGuard {
 	AVFormatContext *ctx = nullptr;
@@ -158,9 +197,13 @@ bool TrimReplayToLastSeconds(const std::string &path, int seconds)
 		return false;
 	}
 
-	remove(path.c_str());
-	if (rename(tempPath.c_str(), path.c_str()) != 0) {
-		// Best effort: the trimmed file exists at tempPath even if the rename failed.
+	// Release our own read handle on the source file before replacing it --
+	// on Windows a still-open handle from this same process can make the
+	// replace below fail with a sharing violation.
+	avformat_close_input(&in.ctx);
+
+	if (!ReplaceFile(tempPath, path)) {
+		// Best effort: the trimmed file exists at tempPath even if the replace failed.
 		return false;
 	}
 	return true;
