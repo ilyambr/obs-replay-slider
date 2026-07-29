@@ -16,6 +16,10 @@ add_library(${CMAKE_PROJECT_NAME} MODULE)
 find_package(libobs REQUIRED)
 target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE OBS::libobs)
 
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/finders")
+find_package(FFmpeg REQUIRED COMPONENTS avformat avcodec avutil)
+target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE FFmpeg::avformat FFmpeg::avcodec FFmpeg::avutil)
+
 if(ENABLE_FRONTEND_API)
   find_package(obs-frontend-api REQUIRED)
   target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE OBS::obs-frontend-api)
@@ -40,6 +44,8 @@ target_sources(
           src/replay-buffer-dock.cpp
           src/replay-buffer-dock.hpp
           src/hotkey-lookup.cpp
-          src/hotkey-lookup.hpp)
+          src/hotkey-lookup.hpp
+          src/clip-trim.cpp
+          src/clip-trim.hpp)
 
 set_target_properties_plugin(${CMAKE_PROJECT_NAME} PROPERTIES OUTPUT_NAME ${_name})

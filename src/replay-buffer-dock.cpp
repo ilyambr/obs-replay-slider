@@ -1,8 +1,8 @@
 #include "replay-buffer-dock.hpp"
 #include "hotkey-lookup.hpp"
+#include "clip-trim.hpp"
 
 #include <obs-module.h>
-#include <util/config-file.h>
 
 #include <QVBoxLayout>
 #include <QGridLayout>
@@ -14,52 +14,19 @@
 #include <QPushButton>
 
 #include <cstring>
+#include <thread>
 
 namespace {
 
-constexpr int kMinDurationSeconds = 30;
-constexpr int kMaxDurationSeconds = 900;
+constexpr int kMinDurationSeconds = 15;
+constexpr int kMaxDurationSeconds = 3600; // 60 minutes
+constexpr int kDefaultDurationSeconds = 60;
 
 QString FormatDuration(int seconds)
 {
 	int m = seconds / 60;
 	int s = seconds % 60;
 	return QStringLiteral("%1:%2").arg(m).arg(s, 2, 10, QChar('0'));
-}
-
-int ClampDuration(int seconds)
-{
-	if (seconds < kMinDurationSeconds)
-		return kMinDurationSeconds;
-	if (seconds > kMaxDurationSeconds)
-		return kMaxDurationSeconds;
-	return seconds;
-}
-
-bool OutputModeIsAdvanced(config_t *config)
-{
-	const char *mode = config_get_string(config, "Output", "Mode");
-	return mode && (strcmp(mode, "Advanced") == 0 || strcmp(mode, "advanced") == 0);
-}
-
-int GetMainReplayDurationSeconds()
-{
-	config_t *config = obs_frontend_get_profile_config();
-	if (!config)
-		return 300;
-	const bool adv = OutputModeIsAdvanced(config);
-	long long val = config_get_int(config, adv ? "AdvOut" : "SimpleOutput", "RecRBTime");
-	return val > 0 ? (int)val : 300;
-}
-
-void SetMainReplayDurationSecondsConfig(int seconds)
-{
-	config_t *config = obs_frontend_get_profile_config();
-	if (!config)
-		return;
-	const bool adv = OutputModeIsAdvanced(config);
-	config_set_int(config, adv ? "AdvOut" : "SimpleOutput", "RecRBTime", seconds);
-	config_save(config);
 }
 
 void EnumFilterCallback(obs_source_t *, obs_source_t *child, void *param)
@@ -97,12 +64,36 @@ QString FilterRowLabel(obs_source_t *filterSource)
 }
 
 // Named (not a lambda) so the exact same pointer can be used to both connect
-// and later disconnect from the main replay buffer output's "stop" signal.
+// and later disconnect from the main replay buffer output's signals.
 void MainReplayStoppedSignalCallback(void *data, calldata_t *cd)
 {
 	auto *dock = static_cast<ReplayBufferDock *>(data);
 	const long long code = calldata_int(cd, "code");
 	QMetaObject::invokeMethod(dock, "NotifyMainReplayStopped", Qt::QueuedConnection, Q_ARG(qlonglong, code));
+}
+
+void MainReplaySavedSignalCallback(void *data, calldata_t *cd)
+{
+	UNUSED_PARAMETER(cd);
+	auto *dock = static_cast<ReplayBufferDock *>(data);
+	QMetaObject::invokeMethod(dock, "NotifyMainReplaySaved", Qt::QueuedConnection);
+}
+
+// Ties a Source Record filter's "replay_saved" signal connection back to the
+// dock and the specific row it belongs to. Owned by that row's
+// ReplayRow::filterSaveConn for as long as the connection is live.
+struct FilterSaveConnection {
+	ReplayBufferDock *dock;
+	QString rowKey;
+};
+
+void FilterReplaySavedSignalCallback(void *data, calldata_t *cd)
+{
+	auto *conn = static_cast<FilterSaveConnection *>(data);
+	const char *path = calldata_string(cd, "path");
+	const QString qpath = path ? QString::fromUtf8(path) : QString();
+	QMetaObject::invokeMethod(conn->dock, "NotifyFilterReplaySaved", Qt::QueuedConnection, Q_ARG(QString, conn->rowKey),
+				  Q_ARG(QString, qpath));
 }
 
 } // namespace
@@ -144,6 +135,7 @@ ReplayBufferDock::~ReplayBufferDock()
 	obs_frontend_remove_event_callback(FrontendEventCallback, this);
 	ReleaseMainOutput();
 	for (auto &row : rows) {
+		DisconnectFilterSaveSignal(row);
 		if (row.filterWeak)
 			obs_weak_source_release(row.filterWeak);
 	}
@@ -152,6 +144,48 @@ ReplayBufferDock::~ReplayBufferDock()
 void ReplayBufferDock::NotifyMainReplayStopped(qlonglong code)
 {
 	mainReplayError = code != OBS_OUTPUT_SUCCESS;
+}
+
+void ReplayBufferDock::NotifyMainReplaySaved()
+{
+	if (!mainReplayOutputRef)
+		return;
+	proc_handler_t *ph = obs_output_get_proc_handler(mainReplayOutputRef);
+	if (!ph)
+		return;
+
+	calldata_t cd;
+	calldata_init(&cd);
+	QString path;
+	if (proc_handler_call(ph, "get_last_replay", &cd)) {
+		const char *p = calldata_string(&cd, "path");
+		if (p && strlen(p))
+			path = QString::fromUtf8(p);
+	}
+	calldata_free(&cd);
+	if (path.isEmpty())
+		return;
+
+	const int idx = FindRowIndex(QStringLiteral("main"), true);
+	if (idx < 0)
+		return;
+	TrimAndReplace(path, rows[idx].slider->value());
+}
+
+void ReplayBufferDock::NotifyFilterReplaySaved(QString rowKey, QString path)
+{
+	if (path.isEmpty())
+		return;
+	const int idx = FindRowIndex(rowKey, false);
+	if (idx < 0)
+		return;
+	TrimAndReplace(path, rows[idx].slider->value());
+}
+
+void ReplayBufferDock::TrimAndReplace(const QString &path, int seconds)
+{
+	std::string stdPath = path.toStdString();
+	std::thread([stdPath, seconds]() { TrimReplayToLastSeconds(stdPath, seconds); }).detach();
 }
 
 void ReplayBufferDock::FrontendEventCallback(enum obs_frontend_event event, void *data)
@@ -164,11 +198,6 @@ void ReplayBufferDock::HandleFrontendEvent(enum obs_frontend_event event)
 {
 	if (event == OBS_FRONTEND_EVENT_REPLAY_BUFFER_STARTING || event == OBS_FRONTEND_EVENT_REPLAY_BUFFER_STARTED) {
 		ReacquireMainOutput();
-	} else if (event == OBS_FRONTEND_EVENT_REPLAY_BUFFER_STOPPED) {
-		if (pendingMainRestart) {
-			pendingMainRestart = false;
-			obs_frontend_replay_buffer_start();
-		}
 	} else if (event == OBS_FRONTEND_EVENT_EXIT) {
 		ReleaseMainOutput();
 	}
@@ -179,8 +208,10 @@ void ReplayBufferDock::ReleaseMainOutput()
 	if (!mainReplayOutputRef)
 		return;
 	signal_handler_t *sh = obs_output_get_signal_handler(mainReplayOutputRef);
-	if (sh)
+	if (sh) {
 		signal_handler_disconnect(sh, "stop", MainReplayStoppedSignalCallback, this);
+		signal_handler_disconnect(sh, "saved", MainReplaySavedSignalCallback, this);
+	}
 	obs_output_release(mainReplayOutputRef);
 	mainReplayOutputRef = nullptr;
 }
@@ -193,9 +224,43 @@ void ReplayBufferDock::ReacquireMainOutput()
 		return;
 
 	signal_handler_t *sh = obs_output_get_signal_handler(mainReplayOutputRef);
-	if (sh)
+	if (sh) {
 		signal_handler_connect(sh, "stop", MainReplayStoppedSignalCallback, this);
+		signal_handler_connect(sh, "saved", MainReplaySavedSignalCallback, this);
+	}
 	mainReplayError = false;
+}
+
+void ReplayBufferDock::ConnectFilterSaveSignal(ReplayRow &row)
+{
+	if (row.isMain || !row.filterWeak || row.filterSaveConn)
+		return;
+	obs_source_t *strong = obs_weak_source_get_source(row.filterWeak);
+	if (!strong)
+		return;
+	signal_handler_t *sh = obs_source_get_signal_handler(strong);
+	if (sh) {
+		auto *conn = new FilterSaveConnection{this, row.key};
+		signal_handler_connect(sh, "replay_saved", FilterReplaySavedSignalCallback, conn);
+		row.filterSaveConn = conn;
+	}
+	obs_source_release(strong);
+}
+
+void ReplayBufferDock::DisconnectFilterSaveSignal(ReplayRow &row)
+{
+	if (!row.filterSaveConn)
+		return;
+	auto *conn = static_cast<FilterSaveConnection *>(row.filterSaveConn);
+	obs_source_t *strong = row.filterWeak ? obs_weak_source_get_source(row.filterWeak) : nullptr;
+	if (strong) {
+		signal_handler_t *sh = obs_source_get_signal_handler(strong);
+		if (sh)
+			signal_handler_disconnect(sh, "replay_saved", FilterReplaySavedSignalCallback, conn);
+		obs_source_release(strong);
+	}
+	delete conn;
+	row.filterSaveConn = nullptr;
 }
 
 int ReplayBufferDock::FindRowIndex(const QString &key, bool isMain) const
@@ -221,14 +286,15 @@ int ReplayBufferDock::AddRow(bool isMain, const QString &key, const QString &lab
 	row.slider->setRange(kMinDurationSeconds, kMaxDurationSeconds);
 	row.slider->setSingleStep(5);
 	row.slider->setPageStep(30);
+	row.slider->setValue(kDefaultDurationSeconds);
 	row.valueLabel = new QLabel(this);
 	row.valueLabel->setMinimumWidth(50);
+	row.valueLabel->setText(FormatDuration(kDefaultDurationSeconds));
 	row.statusDot = new QLabel(this);
 	row.statusDot->setFixedSize(14, 14);
 	row.hotkeyLabel = new QLabel(this);
 	row.hotkeyLabel->setMinimumWidth(70);
-	row.applyButton = new QPushButton(QString::fromUtf8(obs_module_text("Apply")), this);
-	row.applyButton->setVisible(false);
+	row.saveButton = new QPushButton(QString::fromUtf8(obs_module_text("Save")), this);
 	SetStatusDot(row.statusDot, 0);
 
 	grid->addWidget(row.nameLabel, gridRow, 0);
@@ -236,10 +302,13 @@ int ReplayBufferDock::AddRow(bool isMain, const QString &key, const QString &lab
 	grid->addWidget(row.valueLabel, gridRow, 2);
 	grid->addWidget(row.statusDot, gridRow, 3);
 	grid->addWidget(row.hotkeyLabel, gridRow, 4);
-	grid->addWidget(row.applyButton, gridRow, 5);
+	grid->addWidget(row.saveButton, gridRow, 5);
 
 	const int index = rows.size();
 	rows.push_back(row);
+
+	if (!isMain)
+		ConnectFilterSaveSignal(rows[index]);
 
 	const QString rowKey = key;
 	const bool rowIsMain = isMain;
@@ -248,27 +317,14 @@ int ReplayBufferDock::AddRow(bool isMain, const QString &key, const QString &lab
 		if (idx >= 0)
 			rows[idx].valueLabel->setText(FormatDuration(value));
 	});
-	connect(row.slider, &QSlider::sliderReleased, this, [this, rowKey, rowIsMain]() {
+	connect(row.saveButton, &QPushButton::clicked, this, [this, rowKey, rowIsMain]() {
 		const int idx = FindRowIndex(rowKey, rowIsMain);
 		if (idx < 0)
 			return;
-		const int seconds = rows[idx].slider->value();
-		if (rowIsMain) {
-			ApplyMainDuration(seconds);
-		} else if (rows[idx].lastKnownActive) {
-			// Don't disturb a running buffer; hold it for the Apply button
-			// (or it applies for free if the buffer goes inactive on its own).
-			rows[idx].pendingDurationSeconds = seconds;
-		} else {
-			ApplyFilterDuration(rows[idx].filterWeak, seconds);
-		}
-	});
-	connect(row.applyButton, &QPushButton::clicked, this, [this, rowKey, rowIsMain]() {
-		const int idx = FindRowIndex(rowKey, rowIsMain);
-		if (idx < 0 || rowIsMain || rows[idx].pendingDurationSeconds < 0)
-			return;
-		ApplyFilterDuration(rows[idx].filterWeak, rows[idx].pendingDurationSeconds);
-		rows[idx].pendingDurationSeconds = -1;
+		if (rowIsMain)
+			TriggerMainSave();
+		else
+			TriggerFilterSave(rows[idx].filterWeak);
 	});
 
 	return index;
@@ -277,6 +333,7 @@ int ReplayBufferDock::AddRow(bool isMain, const QString &key, const QString &lab
 void ReplayBufferDock::RebuildRows(const QMap<QString, obs_weak_source_t *> &discoveredFilters)
 {
 	for (auto &row : rows) {
+		DisconnectFilterSaveSignal(row);
 		if (row.filterWeak)
 			obs_weak_source_release(row.filterWeak);
 		delete row.nameLabel;
@@ -284,6 +341,7 @@ void ReplayBufferDock::RebuildRows(const QMap<QString, obs_weak_source_t *> &dis
 		delete row.valueLabel;
 		delete row.statusDot;
 		delete row.hotkeyLabel;
+		delete row.saveButton;
 	}
 	rows.clear();
 
@@ -374,13 +432,6 @@ void ReplayBufferDock::UpdateRow(int index)
 
 void ReplayBufferDock::UpdateMainRow(ReplayRow &row)
 {
-	if (!row.slider->isSliderDown()) {
-		const int seconds = ClampDuration(GetMainReplayDurationSeconds());
-		if (row.slider->value() != seconds)
-			row.slider->setValue(seconds);
-		row.valueLabel->setText(FormatDuration(seconds));
-	}
-
 	const bool active = obs_frontend_replay_buffer_active();
 	SetStatusDot(row.statusDot, mainReplayError ? 2 : (active ? 1 : 0));
 
@@ -394,19 +445,17 @@ void ReplayBufferDock::UpdateFilterRow(ReplayRow &row)
 	if (!strong) {
 		SetStatusDot(row.statusDot, 0);
 		row.hotkeyLabel->setText(QString());
-		row.applyButton->setVisible(false);
 		return;
 	}
 
 	int state = 0;
-	bool active = false;
 	QString hotkey;
 	proc_handler_t *ph = obs_source_get_proc_handler(strong);
 	if (ph) {
 		calldata_t cd;
 		calldata_init(&cd);
 		if (proc_handler_call(ph, "get_replay_buffer_status", &cd)) {
-			active = calldata_bool(&cd, "active");
+			const bool active = calldata_bool(&cd, "active");
 			const bool error = calldata_bool(&cd, "error");
 			const char *hk = calldata_string(&cd, "hotkey");
 			hotkey = hk ? QString::fromUtf8(hk) : QString();
@@ -417,56 +466,28 @@ void ReplayBufferDock::UpdateFilterRow(ReplayRow &row)
 	SetStatusDot(row.statusDot, state);
 	row.hotkeyLabel->setText(hotkey.isEmpty() ? QString::fromUtf8(obs_module_text("Unbound")) : hotkey);
 
-	if (row.pendingDurationSeconds >= 0 && !active) {
-		// No longer active: safe to push the held duration change now.
-		ApplyFilterDuration(row.filterWeak, row.pendingDurationSeconds);
-		row.pendingDurationSeconds = -1;
-		row.valueLabel->setToolTip(QString());
-	}
-	row.lastKnownActive = active;
-
-	if (!row.slider->isSliderDown()) {
-		int seconds;
-		if (row.pendingDurationSeconds >= 0) {
-			// Still active: show the held value rather than the live (unchanged) setting.
-			seconds = row.pendingDurationSeconds;
-			row.valueLabel->setToolTip(
-				QString::fromUtf8(obs_module_text("PendingDurationTooltip")));
-		} else {
-			obs_data_t *settings = obs_source_get_settings(strong);
-			seconds = ClampDuration((int)obs_data_get_int(settings, "replay_duration"));
-			obs_data_release(settings);
-		}
-		if (row.slider->value() != seconds)
-			row.slider->setValue(seconds);
-		row.valueLabel->setText(FormatDuration(seconds));
-	}
-
-	row.applyButton->setVisible(row.pendingDurationSeconds >= 0);
-
 	obs_source_release(strong);
 }
 
-void ReplayBufferDock::ApplyMainDuration(int seconds)
+void ReplayBufferDock::TriggerMainSave()
 {
-	SetMainReplayDurationSecondsConfig(seconds);
-	if (obs_frontend_replay_buffer_active()) {
-		pendingMainRestart = true;
-		obs_frontend_replay_buffer_stop();
-	}
+	obs_frontend_replay_buffer_save();
 }
 
-void ReplayBufferDock::ApplyFilterDuration(obs_weak_source_t *filterWeak, int seconds)
+void ReplayBufferDock::TriggerFilterSave(obs_weak_source_t *filterWeak)
 {
 	if (!filterWeak)
 		return;
 	obs_source_t *strong = obs_weak_source_get_source(filterWeak);
 	if (!strong)
 		return;
-	obs_data_t *settings = obs_source_get_settings(strong);
-	obs_data_set_int(settings, "replay_duration", seconds);
-	obs_source_update(strong, settings);
-	obs_data_release(settings);
+	proc_handler_t *ph = obs_source_get_proc_handler(strong);
+	if (ph) {
+		calldata_t cd;
+		calldata_init(&cd);
+		proc_handler_call(ph, "save_replay_buffer", &cd);
+		calldata_free(&cd);
+	}
 	obs_source_release(strong);
 }
 

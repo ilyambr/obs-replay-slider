@@ -20,26 +20,24 @@ struct ReplayRow {
 	QString key;                             // "main", or the filter source's uuid
 
 	QLabel *nameLabel = nullptr;
-	QSlider *slider = nullptr;
+	QSlider *slider = nullptr; // "save length" in seconds -- purely local UI state
 	QLabel *valueLabel = nullptr;
 	QLabel *statusDot = nullptr;
 	QLabel *hotkeyLabel = nullptr;
-	QPushButton *applyButton = nullptr;
+	QPushButton *saveButton = nullptr;
 
-	// Source Record force-restarts its replay output (losing whatever was
-	// already buffered) whenever "replay_duration" changes while active --
-	// there's no way to resize a running buffer. So while a filter row is
-	// active, a released slider value is held here instead of applied
-	// immediately: it applies for free if the buffer happens to go inactive
-	// on its own, or immediately if the user clicks Apply to accept the reset.
-	bool lastKnownActive = false;
-	int pendingDurationSeconds = -1;
+	// Owned FilterSaveConnection*, connecting this filter's own "replay_saved"
+	// signal back to this row; null for the main row.
+	void *filterSaveConn = nullptr;
 };
 
 // Dock showing one row per replay buffer found (the built-in OBS replay buffer,
-// plus every "source_record_filter" instance that has its own replay buffer) --
-// a duration slider (30s-15min), a green/grey/red status dot, and the bound
-// "Save Replay" hotkey for each.
+// plus every "source_record_filter" instance that has its own replay buffer).
+// Each row has a "save length" slider (30s-60min) and a Save button: pressing
+// it (or the buffer's own hotkey) saves the full rolling buffer as usual, and
+// this dock then trims the result down to just the selected length -- like a
+// game console's "save last N minutes of gameplay" feature. A green/grey/red
+// status dot and the bound "Save Replay" hotkey are shown for reference.
 class ReplayBufferDock : public QFrame {
 	Q_OBJECT
 
@@ -49,6 +47,8 @@ public:
 
 public slots:
 	void NotifyMainReplayStopped(qlonglong code);
+	void NotifyMainReplaySaved();
+	void NotifyFilterReplaySaved(QString rowKey, QString path);
 
 private slots:
 	void RefreshAll();
@@ -62,8 +62,12 @@ private:
 	void UpdateMainRow(ReplayRow &row);
 	void UpdateFilterRow(ReplayRow &row);
 
-	void ApplyMainDuration(int seconds);
-	void ApplyFilterDuration(obs_weak_source_t *filterWeak, int seconds);
+	void TriggerMainSave();
+	void TriggerFilterSave(obs_weak_source_t *filterWeak);
+	void TrimAndReplace(const QString &path, int seconds);
+
+	void ConnectFilterSaveSignal(ReplayRow &row);
+	void DisconnectFilterSaveSignal(ReplayRow &row);
 
 	void ReacquireMainOutput();
 	void ReleaseMainOutput();
@@ -78,5 +82,4 @@ private:
 
 	obs_output_t *mainReplayOutputRef = nullptr;
 	bool mainReplayError = false;
-	bool pendingMainRestart = false;
 };
