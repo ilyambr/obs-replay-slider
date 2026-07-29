@@ -97,8 +97,11 @@ bool TrimReplayToLastSeconds(const std::string &path, int seconds)
 		return false;
 
 	// Each stream's first packet after the seek becomes its new zero point.
-	std::vector<int64_t> ptsOffset(in.ctx->nb_streams, AV_NOPTS_VALUE);
-	std::vector<int64_t> dtsOffset(in.ctx->nb_streams, AV_NOPTS_VALUE);
+	// pts and dts must be shifted by the SAME offset per stream -- using
+	// independent offsets breaks the pts/dts ordering on B-frame streams
+	// (dts stays monotonic and precedes pts) and libavformat rejects the
+	// resulting packets with "pts < dts in stream N".
+	std::vector<int64_t> offset(in.ctx->nb_streams, AV_NOPTS_VALUE);
 
 	AVPacket pkt;
 	bool ok = true;
@@ -109,18 +112,22 @@ bool TrimReplayToLastSeconds(const std::string &path, int seconds)
 			continue;
 		}
 
-		if (ptsOffset[inIdx] == AV_NOPTS_VALUE)
-			ptsOffset[inIdx] = pkt.pts != AV_NOPTS_VALUE ? pkt.pts : 0;
-		if (dtsOffset[inIdx] == AV_NOPTS_VALUE)
-			dtsOffset[inIdx] = pkt.dts != AV_NOPTS_VALUE ? pkt.dts : 0;
+		if (offset[inIdx] == AV_NOPTS_VALUE) {
+			if (pkt.dts != AV_NOPTS_VALUE)
+				offset[inIdx] = pkt.dts;
+			else if (pkt.pts != AV_NOPTS_VALUE)
+				offset[inIdx] = pkt.pts;
+			else
+				offset[inIdx] = 0;
+		}
 
 		AVStream *inStream = in.ctx->streams[inIdx];
 		AVStream *outStream = out.ctx->streams[streamMapping[inIdx]];
 
 		if (pkt.pts != AV_NOPTS_VALUE)
-			pkt.pts = std::max<int64_t>(0, pkt.pts - ptsOffset[inIdx]);
+			pkt.pts = std::max<int64_t>(0, pkt.pts - offset[inIdx]);
 		if (pkt.dts != AV_NOPTS_VALUE)
-			pkt.dts = std::max<int64_t>(0, pkt.dts - dtsOffset[inIdx]);
+			pkt.dts = std::max<int64_t>(0, pkt.dts - offset[inIdx]);
 
 		pkt.pts = av_rescale_q_rnd(pkt.pts, inStream->time_base, outStream->time_base,
 					  static_cast<AVRounding>(AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX));
