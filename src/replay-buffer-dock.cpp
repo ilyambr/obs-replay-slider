@@ -11,6 +11,7 @@
 #include <QLabel>
 #include <QTimer>
 #include <QStringList>
+#include <QPushButton>
 
 #include <cstring>
 
@@ -226,6 +227,8 @@ int ReplayBufferDock::AddRow(bool isMain, const QString &key, const QString &lab
 	row.statusDot->setFixedSize(14, 14);
 	row.hotkeyLabel = new QLabel(this);
 	row.hotkeyLabel->setMinimumWidth(70);
+	row.applyButton = new QPushButton(QString::fromUtf8(obs_module_text("Apply")), this);
+	row.applyButton->setVisible(false);
 	SetStatusDot(row.statusDot, 0);
 
 	grid->addWidget(row.nameLabel, gridRow, 0);
@@ -233,6 +236,7 @@ int ReplayBufferDock::AddRow(bool isMain, const QString &key, const QString &lab
 	grid->addWidget(row.valueLabel, gridRow, 2);
 	grid->addWidget(row.statusDot, gridRow, 3);
 	grid->addWidget(row.hotkeyLabel, gridRow, 4);
+	grid->addWidget(row.applyButton, gridRow, 5);
 
 	const int index = rows.size();
 	rows.push_back(row);
@@ -252,11 +256,19 @@ int ReplayBufferDock::AddRow(bool isMain, const QString &key, const QString &lab
 		if (rowIsMain) {
 			ApplyMainDuration(seconds);
 		} else if (rows[idx].lastKnownActive) {
-			// Don't disturb a running buffer; apply once it's no longer active.
+			// Don't disturb a running buffer; hold it for the Apply button
+			// (or it applies for free if the buffer goes inactive on its own).
 			rows[idx].pendingDurationSeconds = seconds;
 		} else {
 			ApplyFilterDuration(rows[idx].filterWeak, seconds);
 		}
+	});
+	connect(row.applyButton, &QPushButton::clicked, this, [this, rowKey, rowIsMain]() {
+		const int idx = FindRowIndex(rowKey, rowIsMain);
+		if (idx < 0 || rowIsMain || rows[idx].pendingDurationSeconds < 0)
+			return;
+		ApplyFilterDuration(rows[idx].filterWeak, rows[idx].pendingDurationSeconds);
+		rows[idx].pendingDurationSeconds = -1;
 	});
 
 	return index;
@@ -382,6 +394,7 @@ void ReplayBufferDock::UpdateFilterRow(ReplayRow &row)
 	if (!strong) {
 		SetStatusDot(row.statusDot, 0);
 		row.hotkeyLabel->setText(QString());
+		row.applyButton->setVisible(false);
 		return;
 	}
 
@@ -428,6 +441,8 @@ void ReplayBufferDock::UpdateFilterRow(ReplayRow &row)
 			row.slider->setValue(seconds);
 		row.valueLabel->setText(FormatDuration(seconds));
 	}
+
+	row.applyButton->setVisible(row.pendingDurationSeconds >= 0);
 
 	obs_source_release(strong);
 }

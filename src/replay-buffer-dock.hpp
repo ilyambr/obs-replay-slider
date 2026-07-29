@@ -12,6 +12,7 @@ class QGridLayout;
 class QSlider;
 class QLabel;
 class QTimer;
+class QPushButton;
 
 struct ReplayRow {
 	bool isMain = false;
@@ -23,12 +24,14 @@ struct ReplayRow {
 	QLabel *valueLabel = nullptr;
 	QLabel *statusDot = nullptr;
 	QLabel *hotkeyLabel = nullptr;
+	QPushButton *applyButton = nullptr;
 
 	// Source Record force-restarts its replay output (losing whatever was
 	// already buffered) whenever "replay_duration" changes while active --
 	// there's no way to resize a running buffer. So while a filter row is
 	// active, a released slider value is held here instead of applied
-	// immediately, and only pushed once the buffer is no longer active.
+	// immediately: it applies for free if the buffer happens to go inactive
+	// on its own, or immediately if the user clicks Apply to accept the reset.
 	bool lastKnownActive = false;
 	int pendingDurationSeconds = -1;
 };
