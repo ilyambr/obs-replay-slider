@@ -13,6 +13,8 @@
 #include <QStringList>
 #include <QPushButton>
 #include <QFrame>
+#include <QMainWindow>
+#include <QStatusBar>
 
 #include <cstring>
 #include <thread>
@@ -179,6 +181,17 @@ void ReplayBufferDock::NotifyFilterReplaySaved(QString rowKey, QString path)
 	const int idx = FindRowIndex(rowKey, false);
 	if (idx < 0)
 		return;
+
+	// OBS's own status bar already announces the main replay buffer's saves;
+	// source-record filters are plugin-created outputs it doesn't know about,
+	// so nothing shows for those unless we do it ourselves here.
+	QMainWindow *mainWindow = qobject_cast<QMainWindow *>(static_cast<QWidget *>(obs_frontend_get_main_window()));
+	if (mainWindow && mainWindow->statusBar()) {
+		const QString msg = QString::fromUtf8(obs_module_text("FilterReplaySavedTo"))
+					     .arg(rows[idx].nameLabel->text(), path);
+		mainWindow->statusBar()->showMessage(msg, 10000);
+	}
+
 	TrimAndReplace(path, rows[idx].slider->value());
 }
 
