@@ -46,6 +46,9 @@ target_sources(
           src/hotkey-lookup.cpp
           src/hotkey-lookup.hpp
           src/clip-trim.cpp
-          src/clip-trim.hpp)
+          src/clip-trim.hpp
+          src/websocket-bridge.cpp
+          src/websocket-bridge.hpp
+          src/obs-websocket-api.h)
 
 set_target_properties_plugin(${CMAKE_PROJECT_NAME} PROPERTIES OUTPUT_NAME ${_name})
