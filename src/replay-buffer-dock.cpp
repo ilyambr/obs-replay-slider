@@ -1,6 +1,7 @@
 #include "replay-buffer-dock.hpp"
 #include "hotkey-lookup.hpp"
 #include "clip-trim.hpp"
+#include "websocket-bridge.hpp"
 
 #include <obs-module.h>
 
@@ -30,6 +31,16 @@ QString FormatDuration(int seconds)
 	int m = seconds / 60;
 	int s = seconds % 60;
 	return QStringLiteral("%1:%2").arg(m).arg(s, 2, 10, QChar('0'));
+}
+
+// Minimal JSON string escaping -- row keys/labels/hotkeys are plain source
+// names and key combos, but escape defensively rather than assume that.
+QString JsonEscape(const QString &s)
+{
+	QString out = s;
+	out.replace(QLatin1Char('\\'), QStringLiteral("\\\\"));
+	out.replace(QLatin1Char('"'), QStringLiteral("\\\""));
+	return out;
 }
 
 void EnumFilterCallback(obs_source_t *, obs_source_t *child, void *param)
@@ -171,6 +182,7 @@ void ReplayBufferDock::NotifyMainReplaySaved()
 	const int idx = FindRowIndex(QStringLiteral("main"), true);
 	if (idx < 0)
 		return;
+	WebsocketBridge::EmitRowSaved(QStringLiteral("main"), path);
 	TrimAndReplace(path, rows[idx].slider->value());
 }
 
@@ -192,6 +204,7 @@ void ReplayBufferDock::NotifyFilterReplaySaved(QString rowKey, QString path)
 		mainWindow->statusBar()->showMessage(msg, 10000);
 	}
 
+	WebsocketBridge::EmitRowSaved(rowKey, path);
 	TrimAndReplace(path, rows[idx].slider->value());
 }
 
@@ -456,7 +469,8 @@ void ReplayBufferDock::UpdateRow(int index)
 void ReplayBufferDock::UpdateMainRow(ReplayRow &row)
 {
 	const bool active = obs_frontend_replay_buffer_active();
-	SetStatusDot(row.statusDot, mainReplayError ? 2 : (active ? 1 : 0));
+	row.statusState = mainReplayError ? 2 : (active ? 1 : 0);
+	SetStatusDot(row.statusDot, row.statusState);
 
 	QString hotkey = mainReplayOutputRef ? FindOutputHotkeyString(mainReplayOutputRef) : QString();
 	row.hotkeyLabel->setText(hotkey.isEmpty() ? QString::fromUtf8(obs_module_text("Unbound")) : hotkey);
@@ -466,6 +480,7 @@ void ReplayBufferDock::UpdateFilterRow(ReplayRow &row)
 {
 	obs_source_t *strong = obs_weak_source_get_source(row.filterWeak);
 	if (!strong) {
+		row.statusState = 0;
 		SetStatusDot(row.statusDot, 0);
 		row.hotkeyLabel->setText(QString());
 		return;
@@ -486,6 +501,7 @@ void ReplayBufferDock::UpdateFilterRow(ReplayRow &row)
 		}
 		calldata_free(&cd);
 	}
+	row.statusState = state;
 	SetStatusDot(row.statusDot, state);
 	row.hotkeyLabel->setText(hotkey.isEmpty() ? QString::fromUtf8(obs_module_text("Unbound")) : hotkey);
 
@@ -512,6 +528,38 @@ void ReplayBufferDock::TriggerFilterSave(obs_weak_source_t *filterWeak)
 		calldata_free(&cd);
 	}
 	obs_source_release(strong);
+}
+
+QString ReplayBufferDock::BuildRowsJson()
+{
+	QString json = QStringLiteral("{\"rows\":[");
+	for (int i = 0; i < rows.size(); i++) {
+		const ReplayRow &row = rows[i];
+		if (i)
+			json += QLatin1Char(',');
+		json += QStringLiteral("{\"key\":\"%1\",\"label\":\"%2\",\"is_main\":%3,\"length_seconds\":%4,"
+					"\"hotkey\":\"%5\",\"status\":%6}")
+				.arg(JsonEscape(row.key), JsonEscape(row.nameLabel->text()),
+				     row.isMain ? QStringLiteral("true") : QStringLiteral("false"),
+				     QString::number(row.slider->value()), JsonEscape(row.hotkeyLabel->text()),
+				     QString::number(row.statusState));
+	}
+	json += QStringLiteral("]}");
+	return json;
+}
+
+bool ReplayBufferDock::SaveRowByKey(QString key)
+{
+	const bool isMain = key == QStringLiteral("main");
+	const int idx = FindRowIndex(key, isMain);
+	if (idx < 0)
+		return false;
+
+	if (isMain)
+		TriggerMainSave();
+	else
+		TriggerFilterSave(rows[idx].filterWeak);
+	return true;
 }
 
 void ReplayBufferDock::SetStatusDot(QLabel *dot, int state)

@@ -27,6 +27,7 @@ struct ReplayRow {
 	QLabel *statusDot = nullptr;
 	QLabel *hotkeyLabel = nullptr;
 	QPushButton *saveButton = nullptr;
+	int statusState = 0; // 0 grey, 1 green, 2 red -- mirrors statusDot; kept for the websocket bridge
 
 	// Owned FilterSaveConnection*, connecting this filter's own "replay_saved"
 	// signal back to this row; null for the main row.
@@ -53,6 +54,13 @@ public slots:
 	void NotifyMainReplayStopped(qlonglong code);
 	void NotifyMainReplaySaved();
 	void NotifyFilterReplaySaved(QString rowKey, QString path);
+
+	// Called (only) via QMetaObject::invokeMethod(..., Qt::BlockingQueuedConnection)
+	// from WebsocketBridge, which runs on obs-websocket's own thread -- these are
+	// the only two things an external tool can do through that bridge: list the
+	// current rows, and trigger one row's save, same as pressing its Save button.
+	QString BuildRowsJson();
+	bool SaveRowByKey(QString key);
 
 private slots:
 	void RefreshAll();
