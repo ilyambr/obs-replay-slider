@@ -14,14 +14,13 @@ class QSlider;
 class QLabel;
 class QTimer;
 class QPushButton;
-class QWidget;
 
 struct ReplayRow {
 	bool isMain = false;
 	obs_weak_source_t *filterWeak = nullptr; // owned; null for the main row
 	QString key;                             // "main", or the filter source's uuid
 
-	QWidget *container = nullptr; // owns everything below; the only thing added to the outer layout
+	QFrame *container = nullptr; // owns everything below; the only thing added to the outer layout
 	QLabel *nameLabel = nullptr;
 	QSlider *slider = nullptr; // "save length" in seconds -- purely local UI state
 	QLabel *valueLabel = nullptr;
