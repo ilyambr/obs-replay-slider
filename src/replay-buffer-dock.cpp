@@ -5,13 +5,14 @@
 #include <obs-module.h>
 
 #include <QVBoxLayout>
-#include <QGridLayout>
+#include <QHBoxLayout>
 #include <QScrollArea>
 #include <QSlider>
 #include <QLabel>
 #include <QTimer>
 #include <QStringList>
 #include <QPushButton>
+#include <QFrame>
 
 #include <cstring>
 #include <thread>
@@ -106,8 +107,7 @@ ReplayBufferDock::ReplayBufferDock(QWidget *parent) : QFrame(parent)
 	outerLayout->setContentsMargins(0, 0, 0, 0);
 
 	auto *content = new QWidget(this);
-	grid = new QGridLayout(content);
-	grid->setColumnStretch(1, 1);
+	rowsLayout = new QVBoxLayout(content);
 
 	auto *scrollArea = new QScrollArea(this);
 	scrollArea->setWidgetResizable(true);
@@ -279,30 +279,43 @@ int ReplayBufferDock::AddRow(bool isMain, const QString &key, const QString &lab
 	row.key = key;
 	row.filterWeak = weak;
 
-	const int gridRow = rows.size();
+	row.container = new QFrame(this);
+	row.container->setFrameShape(QFrame::NoFrame);
 
-	row.nameLabel = new QLabel(label, this);
-	row.slider = new QSlider(Qt::Horizontal, this);
+	row.nameLabel = new QLabel(label, row.container);
+	row.slider = new QSlider(Qt::Horizontal, row.container);
 	row.slider->setRange(kMinDurationSeconds, kMaxDurationSeconds);
 	row.slider->setSingleStep(5);
 	row.slider->setPageStep(30);
 	row.slider->setValue(kDefaultDurationSeconds);
-	row.valueLabel = new QLabel(this);
+	row.valueLabel = new QLabel(row.container);
 	row.valueLabel->setMinimumWidth(50);
 	row.valueLabel->setText(FormatDuration(kDefaultDurationSeconds));
-	row.statusDot = new QLabel(this);
+	row.statusDot = new QLabel(row.container);
 	row.statusDot->setFixedSize(14, 14);
-	row.hotkeyLabel = new QLabel(this);
+	row.hotkeyLabel = new QLabel(row.container);
 	row.hotkeyLabel->setMinimumWidth(70);
-	row.saveButton = new QPushButton(QString::fromUtf8(obs_module_text("Save")), this);
+	row.saveButton = new QPushButton(QString::fromUtf8(obs_module_text("Save")), row.container);
 	SetStatusDot(row.statusDot, 0);
 
-	grid->addWidget(row.nameLabel, gridRow, 0);
-	grid->addWidget(row.slider, gridRow, 1);
-	grid->addWidget(row.valueLabel, gridRow, 2);
-	grid->addWidget(row.statusDot, gridRow, 3);
-	grid->addWidget(row.hotkeyLabel, gridRow, 4);
-	grid->addWidget(row.saveButton, gridRow, 5);
+	// Top: name, status dot, hotkey, save button. Bottom: the slider, full
+	// width, with its value beside it -- keeping the slider on its own row
+	// means it stays usable even when the dock is narrow.
+	auto *topRow = new QHBoxLayout();
+	topRow->addWidget(row.nameLabel, 1);
+	topRow->addWidget(row.statusDot);
+	topRow->addWidget(row.hotkeyLabel);
+	topRow->addWidget(row.saveButton);
+
+	auto *bottomRow = new QHBoxLayout();
+	bottomRow->addWidget(row.slider, 1);
+	bottomRow->addWidget(row.valueLabel);
+
+	auto *containerLayout = new QVBoxLayout(row.container);
+	containerLayout->addLayout(topRow);
+	containerLayout->addLayout(bottomRow);
+
+	rowsLayout->insertWidget(static_cast<int>(rows.size()), row.container);
 
 	const int index = rows.size();
 	rows.push_back(row);
@@ -336,17 +349,12 @@ void ReplayBufferDock::RebuildRows(const QMap<QString, obs_weak_source_t *> &dis
 		DisconnectFilterSaveSignal(row);
 		if (row.filterWeak)
 			obs_weak_source_release(row.filterWeak);
-		delete row.nameLabel;
-		delete row.slider;
-		delete row.valueLabel;
-		delete row.statusDot;
-		delete row.hotkeyLabel;
-		delete row.saveButton;
+		delete row.container; // also deletes nameLabel/slider/valueLabel/statusDot/hotkeyLabel/saveButton
 	}
 	rows.clear();
 
 	QLayoutItem *item;
-	while ((item = grid->takeAt(0)) != nullptr)
+	while ((item = rowsLayout->takeAt(0)) != nullptr)
 		delete item;
 
 	AddRow(true, QStringLiteral("main"), QString::fromUtf8(obs_module_text("MainReplayBuffer")), nullptr);
@@ -363,6 +371,8 @@ void ReplayBufferDock::RebuildRows(const QMap<QString, obs_weak_source_t *> &dis
 		}
 		AddRow(false, key, label, weak);
 	}
+
+	rowsLayout->addStretch(1);
 }
 
 void ReplayBufferDock::RefreshAll()

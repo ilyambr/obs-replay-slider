@@ -7,18 +7,21 @@
 #include <QVector>
 #include <QMap>
 #include <QString>
+#include <QSize>
 
-class QGridLayout;
+class QVBoxLayout;
 class QSlider;
 class QLabel;
 class QTimer;
 class QPushButton;
+class QWidget;
 
 struct ReplayRow {
 	bool isMain = false;
 	obs_weak_source_t *filterWeak = nullptr; // owned; null for the main row
 	QString key;                             // "main", or the filter source's uuid
 
+	QWidget *container = nullptr; // owns everything below; the only thing added to the outer layout
 	QLabel *nameLabel = nullptr;
 	QSlider *slider = nullptr; // "save length" in seconds -- purely local UI state
 	QLabel *valueLabel = nullptr;
@@ -44,6 +47,8 @@ class ReplayBufferDock : public QFrame {
 public:
 	explicit ReplayBufferDock(QWidget *parent = nullptr);
 	~ReplayBufferDock() override;
+
+	QSize sizeHint() const override { return QSize(420, 240); }
 
 public slots:
 	void NotifyMainReplayStopped(qlonglong code);
@@ -76,7 +81,7 @@ private:
 	static void FrontendEventCallback(enum obs_frontend_event event, void *data);
 	void HandleFrontendEvent(enum obs_frontend_event event);
 
-	QGridLayout *grid = nullptr;
+	QVBoxLayout *rowsLayout = nullptr;
 	QTimer *refreshTimer = nullptr;
 	QVector<ReplayRow> rows;
 
