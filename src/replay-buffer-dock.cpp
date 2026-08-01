@@ -562,6 +562,20 @@ bool ReplayBufferDock::SaveRowByKey(QString key)
 	return true;
 }
 
+bool ReplayBufferDock::SetRowLengthByKey(QString key, int seconds)
+{
+	const bool isMain = key == QStringLiteral("main");
+	const int idx = FindRowIndex(key, isMain);
+	if (idx < 0)
+		return false;
+
+	// QSlider::setValue clamps to [kMinDurationSeconds, kMaxDurationSeconds] itself,
+	// and its existing valueChanged connection already keeps valueLabel in sync --
+	// this is exactly what dragging the slider by hand does.
+	rows[idx].slider->setValue(seconds);
+	return true;
+}
+
 void ReplayBufferDock::SetStatusDot(QLabel *dot, int state)
 {
 	const char *color = "#808080";

@@ -14,6 +14,7 @@ class ReplayBufferDock;
 //   list_rows -> { "rows": [ { key, label, is_main, length_seconds, hotkey,
 //                  status (0 grey / 1 green / 2 red) }, ... ], "success": true }
 //   save_row  { "key": <row key> } -> { "success": bool, "error"?: string }
+//   set_row_length { "key": <row key>, "seconds": int } -> { "success": bool, "error"?: string }
 //
 // Vendor event:
 //   row_saved { "key": <row key>, "path": <string> } -- emitted once a row's
