@@ -57,10 +57,12 @@ public slots:
 
 	// Called (only) via QMetaObject::invokeMethod(..., Qt::BlockingQueuedConnection)
 	// from WebsocketBridge, which runs on obs-websocket's own thread -- these are
-	// the only two things an external tool can do through that bridge: list the
-	// current rows, and trigger one row's save, same as pressing its Save button.
+	// the only things an external tool can do through that bridge: list the
+	// current rows, trigger one row's save (same as its Save button), and set
+	// one row's save-length slider (same as dragging it by hand).
 	QString BuildRowsJson();
 	bool SaveRowByKey(QString key);
+	bool SetRowLengthByKey(QString key, int seconds);
 
 private slots:
 	void RefreshAll();

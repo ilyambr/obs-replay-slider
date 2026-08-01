@@ -49,6 +49,20 @@ void HandleSaveRow(obs_data_t *request_data, obs_data_t *response_data, void *)
 		obs_data_set_string(response_data, "error", "unknown row key");
 }
 
+void HandleSetRowLength(obs_data_t *request_data, obs_data_t *response_data, void *)
+{
+	const char *key = request_data ? obs_data_get_string(request_data, "key") : nullptr;
+	long long seconds = request_data ? obs_data_get_int(request_data, "seconds") : 0;
+	bool ok = false;
+	if (g_dock && key && *key) {
+		QMetaObject::invokeMethod(g_dock, "SetRowLengthByKey", Qt::BlockingQueuedConnection, Q_RETURN_ARG(bool, ok),
+					  Q_ARG(QString, QString::fromUtf8(key)), Q_ARG(int, static_cast<int>(seconds)));
+	}
+	obs_data_set_bool(response_data, "success", ok);
+	if (!ok)
+		obs_data_set_string(response_data, "error", "unknown row key");
+}
+
 } // namespace
 
 namespace WebsocketBridge {
@@ -67,6 +81,7 @@ void Register(ReplayBufferDock *dock)
 
 	obs_websocket_vendor_register_request(g_vendor, "list_rows", HandleListRows, nullptr);
 	obs_websocket_vendor_register_request(g_vendor, "save_row", HandleSaveRow, nullptr);
+	obs_websocket_vendor_register_request(g_vendor, "set_row_length", HandleSetRowLength, nullptr);
 }
 
 void Unregister()
@@ -74,6 +89,7 @@ void Unregister()
 	if (g_vendor) {
 		obs_websocket_vendor_unregister_request(g_vendor, "list_rows");
 		obs_websocket_vendor_unregister_request(g_vendor, "save_row");
+		obs_websocket_vendor_unregister_request(g_vendor, "set_row_length");
 	}
 	g_vendor = nullptr;
 	g_dock = nullptr;
