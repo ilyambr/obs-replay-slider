@@ -72,6 +72,13 @@ public slots:
 	bool SaveRowByKey(QString key);
 	bool SetRowLengthByKey(QString key, int seconds);
 
+	// Empty path clears it (reverts to "leave the trimmed clip where the buffer
+	// wrote it"). A non-empty path must already exist -- this is meant for a
+	// companion app pointing it at a drive/folder it just created itself (e.g. a
+	// RAM disk it just mounted), not for creating arbitrary directories on our
+	// behalf.
+	bool SetDestDirByPath(QString path);
+
 private slots:
 	void RefreshAll();
 

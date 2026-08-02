@@ -664,6 +664,18 @@ bool ReplayBufferDock::SetRowLengthByKey(QString key, int seconds)
 	return true;
 }
 
+bool ReplayBufferDock::SetDestDirByPath(QString path)
+{
+	const QString trimmed = path.trimmed();
+	if (!trimmed.isEmpty() && !QDir(trimmed).exists())
+		return false;
+
+	destDir = trimmed;
+	destDirEdit->setText(trimmed);
+	SaveDestDir();
+	return true;
+}
+
 void ReplayBufferDock::SetStatusDot(QLabel *dot, int state)
 {
 	const char *color = "#808080";

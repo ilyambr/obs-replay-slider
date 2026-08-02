@@ -63,6 +63,21 @@ void HandleSetRowLength(obs_data_t *request_data, obs_data_t *response_data, voi
 		obs_data_set_string(response_data, "error", "unknown row key");
 }
 
+// "path" may be an empty string, on purpose -- that's how a caller clears the
+// destination back to "leave the trimmed clip where the buffer wrote it".
+void HandleSetDestDir(obs_data_t *request_data, obs_data_t *response_data, void *)
+{
+	const char *path = request_data ? obs_data_get_string(request_data, "path") : nullptr;
+	bool ok = false;
+	if (g_dock) {
+		QMetaObject::invokeMethod(g_dock, "SetDestDirByPath", Qt::BlockingQueuedConnection, Q_RETURN_ARG(bool, ok),
+					  Q_ARG(QString, QString::fromUtf8(path ? path : "")));
+	}
+	obs_data_set_bool(response_data, "success", ok);
+	if (!ok)
+		obs_data_set_string(response_data, "error", "path does not exist");
+}
+
 } // namespace
 
 namespace WebsocketBridge {
@@ -82,6 +97,7 @@ void Register(ReplayBufferDock *dock)
 	obs_websocket_vendor_register_request(g_vendor, "list_rows", HandleListRows, nullptr);
 	obs_websocket_vendor_register_request(g_vendor, "save_row", HandleSaveRow, nullptr);
 	obs_websocket_vendor_register_request(g_vendor, "set_row_length", HandleSetRowLength, nullptr);
+	obs_websocket_vendor_register_request(g_vendor, "set_dest_dir", HandleSetDestDir, nullptr);
 }
 
 void Unregister()
@@ -90,6 +106,7 @@ void Unregister()
 		obs_websocket_vendor_unregister_request(g_vendor, "list_rows");
 		obs_websocket_vendor_unregister_request(g_vendor, "save_row");
 		obs_websocket_vendor_unregister_request(g_vendor, "set_row_length");
+		obs_websocket_vendor_unregister_request(g_vendor, "set_dest_dir");
 	}
 	g_vendor = nullptr;
 	g_dock = nullptr;
