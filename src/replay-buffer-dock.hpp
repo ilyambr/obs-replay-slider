@@ -14,6 +14,7 @@ class QSlider;
 class QLabel;
 class QTimer;
 class QPushButton;
+class QLineEdit;
 
 struct ReplayRow {
 	bool isMain = false;
@@ -55,6 +56,13 @@ public slots:
 	void NotifyMainReplaySaved();
 	void NotifyFilterReplaySaved(QString rowKey, QString path);
 
+	// Invoked from the trim's background thread once it finishes. finalPath
+	// may differ from the path NotifyMain/FilterReplaySaved saw if a
+	// destination folder is configured (e.g. moving off a RAM disk), or fall
+	// back to the original path if trimming/moving failed (the save itself
+	// still happened either way).
+	void NotifyTrimComplete(QString rowKey, bool isMain, QString finalPath);
+
 	// Called (only) via QMetaObject::invokeMethod(..., Qt::BlockingQueuedConnection)
 	// from WebsocketBridge, which runs on obs-websocket's own thread -- these are
 	// the only things an external tool can do through that bridge: list the
@@ -78,13 +86,17 @@ private:
 
 	void TriggerMainSave();
 	void TriggerFilterSave(obs_weak_source_t *filterWeak);
-	void TrimAndReplace(const QString &path, int seconds);
+	void TrimAndReplace(const QString &rowKey, bool isMain, const QString &path, int seconds);
 
 	void ConnectFilterSaveSignal(ReplayRow &row);
 	void DisconnectFilterSaveSignal(ReplayRow &row);
 
 	void ReacquireMainOutput();
 	void ReleaseMainOutput();
+
+	void BrowseForDestDir();
+	void LoadDestDir();
+	void SaveDestDir();
 
 	static void SetStatusDot(QLabel *dot, int state); // 0 grey, 1 green, 2 red
 	static void FrontendEventCallback(enum obs_frontend_event event, void *data);
@@ -93,6 +105,12 @@ private:
 	QVBoxLayout *rowsLayout = nullptr;
 	QTimer *refreshTimer = nullptr;
 	QVector<ReplayRow> rows;
+
+	// Optional: where trimmed clips actually land, e.g. a persistent SSD
+	// folder when the buffer's own output path is a RAM disk. Empty means
+	// "leave the trimmed clip where the buffer wrote it" (the old behavior).
+	QLineEdit *destDirEdit = nullptr;
+	QString destDir;
 
 	obs_output_t *mainReplayOutputRef = nullptr;
 	bool mainReplayError = false;

@@ -43,12 +43,80 @@ bool ReplaceFile(const std::string &tempPath, const std::string &path)
 	}
 	return false;
 }
+
+// Same idea, but MOVEFILE_COPY_ALLOWED is required whenever source and
+// destination can be on different volumes (e.g. a RAM disk -> a real SSD) --
+// plain MoveFileExW fails across volumes without it.
+bool MoveFileAcrossVolumes(const std::string &srcPath, const std::string &destPath)
+{
+	const std::wstring wSrc = Utf8ToWide(srcPath);
+	const std::wstring wDest = Utf8ToWide(destPath);
+	for (int attempt = 0; attempt < 10; attempt++) {
+		if (MoveFileExW(wSrc.c_str(), wDest.c_str(),
+				 MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED | MOVEFILE_WRITE_THROUGH))
+			return true;
+		Sleep(200);
+	}
+	return false;
+}
 #else
 bool ReplaceFile(const std::string &tempPath, const std::string &path)
 {
 	return rename(tempPath.c_str(), path.c_str()) == 0;
 }
+
+bool MoveFileAcrossVolumes(const std::string &srcPath, const std::string &destPath)
+{
+	if (rename(srcPath.c_str(), destPath.c_str()) == 0)
+		return true;
+	// rename() fails across filesystems on POSIX too; fall back to copy+remove.
+	FILE *in = fopen(srcPath.c_str(), "rb");
+	if (!in)
+		return false;
+	FILE *out = fopen(destPath.c_str(), "wb");
+	if (!out) {
+		fclose(in);
+		return false;
+	}
+	char buf[1 << 16];
+	size_t n;
+	bool ok = true;
+	while ((n = fread(buf, 1, sizeof(buf), in)) > 0) {
+		if (fwrite(buf, 1, n, out) != n) {
+			ok = false;
+			break;
+		}
+	}
+	fclose(in);
+	fclose(out);
+	if (ok)
+		remove(srcPath.c_str());
+	else
+		remove(destPath.c_str());
+	return ok;
+}
 #endif
+
+std::string BaseName(const std::string &path)
+{
+	const size_t pos = path.find_last_of("/\\");
+	return pos == std::string::npos ? path : path.substr(pos + 1);
+}
+
+// Joins a directory and filename, tolerating a trailing slash on the directory.
+std::string JoinPath(const std::string &dir, const std::string &name)
+{
+	if (dir.empty())
+		return name;
+	const char last = dir.back();
+	if (last == '/' || last == '\\')
+		return dir + name;
+#ifdef _WIN32
+	return dir + "\\" + name;
+#else
+	return dir + "/" + name;
+#endif
+}
 
 struct InputGuard {
 	AVFormatContext *ctx = nullptr;
@@ -72,30 +140,49 @@ struct OutputGuard {
 	}
 };
 
+// Moves `path` to destDir (if non-empty) and returns the final path, or
+// `path` unchanged if destDir is empty. Returns an empty string only if a
+// move was requested and actually failed.
+std::string FinishAt(const std::string &path, const std::string &destDir)
+{
+	if (destDir.empty())
+		return path;
+	const std::string destPath = JoinPath(destDir, BaseName(path));
+	if (destPath == path)
+		return path;
+	if (!MoveFileAcrossVolumes(path, destPath))
+		return std::string();
+	return destPath;
+}
+
 } // namespace
 
-bool TrimReplayToLastSeconds(const std::string &path, int seconds)
+std::string TrimReplayToLastSeconds(const std::string &path, int seconds, const std::string &destDir)
 {
 	if (seconds <= 0 || path.empty())
-		return false;
+		return std::string();
 
 	InputGuard in;
 	if (avformat_open_input(&in.ctx, path.c_str(), nullptr, nullptr) < 0)
-		return false;
+		return std::string();
 	if (avformat_find_stream_info(in.ctx, nullptr) < 0)
-		return false;
+		return std::string();
 
 	const int64_t totalDuration = in.ctx->duration; // AV_TIME_BASE units (microseconds)
 	if (totalDuration <= 0)
-		return false;
+		return std::string();
 
 	const int64_t wantedDuration = static_cast<int64_t>(seconds) * AV_TIME_BASE;
-	if (wantedDuration >= totalDuration)
-		return true; // Already shorter than the requested clip length; nothing to do.
+	if (wantedDuration >= totalDuration) {
+		// Already shorter than the requested clip length -- nothing to trim,
+		// but still honor a requested move off e.g. a RAM disk.
+		avformat_close_input(&in.ctx);
+		return FinishAt(path, destDir);
+	}
 
 	const int64_t seekTarget = totalDuration - wantedDuration;
 	if (av_seek_frame(in.ctx, -1, seekTarget, AVSEEK_FLAG_BACKWARD) < 0)
-		return false;
+		return std::string();
 
 	const std::string tempPath = path + ".trimtmp";
 
@@ -104,7 +191,7 @@ bool TrimReplayToLastSeconds(const std::string &path, int seconds)
 	// ".trimtmp", which libavformat can't map to a format on its own.
 	avformat_alloc_output_context2(&out.ctx, nullptr, nullptr, path.c_str());
 	if (!out.ctx)
-		return false;
+		return std::string();
 
 	std::vector<int> streamMapping(in.ctx->nb_streams, -1);
 	int nextOutIndex = 0;
@@ -116,24 +203,24 @@ bool TrimReplayToLastSeconds(const std::string &path, int seconds)
 
 		AVStream *outStream = avformat_new_stream(out.ctx, nullptr);
 		if (!outStream)
-			return false;
+			return std::string();
 		if (avcodec_parameters_copy(outStream->codecpar, inStream->codecpar) < 0)
-			return false;
+			return std::string();
 		outStream->codecpar->codec_tag = 0;
 		outStream->time_base = inStream->time_base;
 		streamMapping[i] = nextOutIndex++;
 	}
 	if (nextOutIndex == 0)
-		return false;
+		return std::string();
 
 	if (!(out.ctx->oformat->flags & AVFMT_NOFILE)) {
 		if (avio_open(&out.ctx->pb, tempPath.c_str(), AVIO_FLAG_WRITE) < 0)
-			return false;
+			return std::string();
 		out.openedFile = true;
 	}
 
 	if (avformat_write_header(out.ctx, nullptr) < 0)
-		return false;
+		return std::string();
 
 	// Each stream's first packet after the seek becomes its new zero point.
 	// pts and dts must be shifted by the SAME offset per stream -- using
@@ -194,7 +281,7 @@ bool TrimReplayToLastSeconds(const std::string &path, int seconds)
 
 	if (!ok) {
 		remove(tempPath.c_str());
-		return false;
+		return std::string();
 	}
 
 	// Release our own read handle on the source file before replacing it --
@@ -204,7 +291,7 @@ bool TrimReplayToLastSeconds(const std::string &path, int seconds)
 
 	if (!ReplaceFile(tempPath, path)) {
 		// Best effort: the trimmed file exists at tempPath even if the replace failed.
-		return false;
+		return std::string();
 	}
-	return true;
+	return FinishAt(path, destDir);
 }

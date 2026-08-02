@@ -16,6 +16,13 @@
 #include <QFrame>
 #include <QMainWindow>
 #include <QStatusBar>
+#include <QLineEdit>
+#include <QFileDialog>
+#include <QFile>
+#include <QTextStream>
+#include <QDir>
+#include <QFileInfo>
+#include <QPointer>
 
 #include <cstring>
 #include <thread>
@@ -119,6 +126,26 @@ ReplayBufferDock::ReplayBufferDock(QWidget *parent) : QFrame(parent)
 	auto *outerLayout = new QVBoxLayout(this);
 	outerLayout->setContentsMargins(0, 0, 0, 0);
 
+	// Optional: where trimmed clips actually land. Meant for when the
+	// buffer's own output path is a RAM disk (fixes the multi-second stall
+	// writing/reading a large buffer file causes) -- the small trimmed clip
+	// then gets moved off it to somewhere persistent. Empty/default leaves
+	// clips exactly where they've always landed.
+	auto *destDirRow = new QHBoxLayout();
+	destDirRow->addWidget(new QLabel(QString::fromUtf8(obs_module_text("DestDirLabel")), this));
+	destDirEdit = new QLineEdit(this);
+	destDirEdit->setPlaceholderText(QString::fromUtf8(obs_module_text("DestDirPlaceholder")));
+	destDirRow->addWidget(destDirEdit, 1);
+	auto *browseButton = new QPushButton(QString::fromUtf8(obs_module_text("Browse")), this);
+	destDirRow->addWidget(browseButton);
+	outerLayout->addLayout(destDirRow);
+
+	connect(browseButton, &QPushButton::clicked, this, &ReplayBufferDock::BrowseForDestDir);
+	connect(destDirEdit, &QLineEdit::editingFinished, this, [this]() {
+		destDir = destDirEdit->text().trimmed();
+		SaveDestDir();
+	});
+
 	auto *content = new QWidget(this);
 	rowsLayout = new QVBoxLayout(content);
 
@@ -126,6 +153,9 @@ ReplayBufferDock::ReplayBufferDock(QWidget *parent) : QFrame(parent)
 	scrollArea->setWidgetResizable(true);
 	scrollArea->setWidget(content);
 	outerLayout->addWidget(scrollArea);
+
+	LoadDestDir();
+	destDirEdit->setText(destDir);
 
 	refreshTimer = new QTimer(this);
 	connect(refreshTimer, &QTimer::timeout, this, &ReplayBufferDock::RefreshAll);
@@ -182,8 +212,7 @@ void ReplayBufferDock::NotifyMainReplaySaved()
 	const int idx = FindRowIndex(QStringLiteral("main"), true);
 	if (idx < 0)
 		return;
-	WebsocketBridge::EmitRowSaved(QStringLiteral("main"), path);
-	TrimAndReplace(path, rows[idx].slider->value());
+	TrimAndReplace(QStringLiteral("main"), true, path, rows[idx].slider->value());
 }
 
 void ReplayBufferDock::NotifyFilterReplaySaved(QString rowKey, QString path)
@@ -193,25 +222,84 @@ void ReplayBufferDock::NotifyFilterReplaySaved(QString rowKey, QString path)
 	const int idx = FindRowIndex(rowKey, false);
 	if (idx < 0)
 		return;
-
-	// OBS's own status bar already announces the main replay buffer's saves;
-	// source-record filters are plugin-created outputs it doesn't know about,
-	// so nothing shows for those unless we do it ourselves here.
-	QMainWindow *mainWindow = qobject_cast<QMainWindow *>(static_cast<QWidget *>(obs_frontend_get_main_window()));
-	if (mainWindow && mainWindow->statusBar()) {
-		const QString msg = QString::fromUtf8(obs_module_text("FilterReplaySavedTo"))
-					     .arg(rows[idx].nameLabel->text(), path);
-		mainWindow->statusBar()->showMessage(msg, 10000);
-	}
-
-	WebsocketBridge::EmitRowSaved(rowKey, path);
-	TrimAndReplace(path, rows[idx].slider->value());
+	TrimAndReplace(rowKey, false, path, rows[idx].slider->value());
 }
 
-void ReplayBufferDock::TrimAndReplace(const QString &path, int seconds)
+void ReplayBufferDock::TrimAndReplace(const QString &rowKey, bool isMain, const QString &path, int seconds)
 {
 	std::string stdPath = path.toStdString();
-	std::thread([stdPath, seconds]() { TrimReplayToLastSeconds(stdPath, seconds); }).detach();
+	std::string stdDestDir = destDir.toStdString();
+	QPointer<ReplayBufferDock> self(this);
+	std::thread([self, rowKey, isMain, path, stdPath, seconds, stdDestDir]() {
+		const std::string trimmedPath = TrimReplayToLastSeconds(stdPath, seconds, stdDestDir);
+		if (!self)
+			return;
+		// The save itself already happened regardless of whether trimming/moving
+		// afterward succeeded -- if that failed, the original file is left
+		// untouched at `path`, so fall back to announcing that instead of
+		// dropping the notification entirely.
+		const QString finalPath = trimmedPath.empty() ? path : QString::fromStdString(trimmedPath);
+		QMetaObject::invokeMethod(self, "NotifyTrimComplete", Qt::QueuedConnection, Q_ARG(QString, rowKey),
+					  Q_ARG(bool, isMain), Q_ARG(QString, finalPath));
+	}).detach();
+}
+
+void ReplayBufferDock::NotifyTrimComplete(QString rowKey, bool isMain, QString finalPath)
+{
+	// OBS's own status bar already announces the main replay buffer's saves;
+	// source-record filters are plugin-created outputs it doesn't know about,
+	// so nothing shows for those unless we do it ourselves here. Shown only
+	// now (with the clip's real final location) rather than at save time,
+	// since a configured destination folder can move it after trimming.
+	if (!isMain) {
+		const int idx = FindRowIndex(rowKey, false);
+		QMainWindow *mainWindow = qobject_cast<QMainWindow *>(static_cast<QWidget *>(obs_frontend_get_main_window()));
+		if (idx >= 0 && mainWindow && mainWindow->statusBar()) {
+			const QString msg = QString::fromUtf8(obs_module_text("FilterReplaySavedTo"))
+						     .arg(rows[idx].nameLabel->text(), finalPath);
+			mainWindow->statusBar()->showMessage(msg, 10000);
+		}
+	}
+
+	WebsocketBridge::EmitRowSaved(rowKey, finalPath);
+}
+
+void ReplayBufferDock::BrowseForDestDir()
+{
+	const QString chosen = QFileDialog::getExistingDirectory(this, QString::fromUtf8(obs_module_text("DestDirLabel")),
+								  destDirEdit->text());
+	if (chosen.isEmpty())
+		return;
+	destDirEdit->setText(chosen);
+	destDir = chosen;
+	SaveDestDir();
+}
+
+void ReplayBufferDock::LoadDestDir()
+{
+	char *cpath = obs_module_config_path("dest-dir.txt");
+	if (!cpath)
+		return;
+	QFile file(QString::fromUtf8(cpath));
+	bfree(cpath);
+	if (file.open(QIODevice::ReadOnly | QIODevice::Text))
+		destDir = QString::fromUtf8(file.readAll()).trimmed();
+}
+
+void ReplayBufferDock::SaveDestDir()
+{
+	char *cpath = obs_module_config_path("dest-dir.txt");
+	if (!cpath)
+		return;
+	const QString qpath = QString::fromUtf8(cpath);
+	bfree(cpath);
+
+	QDir().mkpath(QFileInfo(qpath).absolutePath());
+	QFile file(qpath);
+	if (file.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
+		QTextStream stream(&file);
+		stream << destDir;
+	}
 }
 
 void ReplayBufferDock::FrontendEventCallback(enum obs_frontend_event event, void *data)
