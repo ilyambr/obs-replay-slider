@@ -35,7 +35,7 @@
     },
     "name": "replay-slider",
     "displayName": "Replay Slider",
-    "version": "0.2.8",
+    "version": "0.2.9",
     "author": "ilyambr",
     "website": "https://github.com/ilyambr/obs-replay-slider",
     "email": "noreply@github.com"
