@@ -78,6 +78,22 @@ void HandleSetDestDir(obs_data_t *request_data, obs_data_t *response_data, void 
 		obs_data_set_string(response_data, "error", "path does not exist");
 }
 
+// "path" may be an empty string, on purpose -- clears this row's override
+// back to the shared destDir (see HandleSetDestDir above).
+void HandleSetRowDestDir(obs_data_t *request_data, obs_data_t *response_data, void *)
+{
+	const char *key = request_data ? obs_data_get_string(request_data, "key") : nullptr;
+	const char *path = request_data ? obs_data_get_string(request_data, "path") : nullptr;
+	bool ok = false;
+	if (g_dock && key && *key) {
+		QMetaObject::invokeMethod(g_dock, "SetRowDestDirByKey", Qt::BlockingQueuedConnection, Q_RETURN_ARG(bool, ok),
+					  Q_ARG(QString, QString::fromUtf8(key)), Q_ARG(QString, QString::fromUtf8(path ? path : "")));
+	}
+	obs_data_set_bool(response_data, "success", ok);
+	if (!ok)
+		obs_data_set_string(response_data, "error", "unknown row key, or path does not exist");
+}
+
 void HandleSetBufferDuration(obs_data_t *request_data, obs_data_t *response_data, void *)
 {
 	long long seconds = request_data ? obs_data_get_int(request_data, "seconds") : 0;
@@ -111,6 +127,7 @@ void Register(ReplayBufferDock *dock)
 	obs_websocket_vendor_register_request(g_vendor, "save_row", HandleSaveRow, nullptr);
 	obs_websocket_vendor_register_request(g_vendor, "set_row_length", HandleSetRowLength, nullptr);
 	obs_websocket_vendor_register_request(g_vendor, "set_dest_dir", HandleSetDestDir, nullptr);
+	obs_websocket_vendor_register_request(g_vendor, "set_row_dest_dir", HandleSetRowDestDir, nullptr);
 	obs_websocket_vendor_register_request(g_vendor, "set_buffer_duration", HandleSetBufferDuration, nullptr);
 }
 
@@ -121,6 +138,7 @@ void Unregister()
 		obs_websocket_vendor_unregister_request(g_vendor, "save_row");
 		obs_websocket_vendor_unregister_request(g_vendor, "set_row_length");
 		obs_websocket_vendor_unregister_request(g_vendor, "set_dest_dir");
+		obs_websocket_vendor_unregister_request(g_vendor, "set_row_dest_dir");
 		obs_websocket_vendor_unregister_request(g_vendor, "set_buffer_duration");
 	}
 	g_vendor = nullptr;

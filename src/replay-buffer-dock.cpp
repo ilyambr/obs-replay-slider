@@ -20,6 +20,8 @@
 #include <QTextStream>
 #include <QDir>
 #include <QFileInfo>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QPointer>
 
 #include <cstring>
@@ -142,6 +144,7 @@ ReplayBufferDock::ReplayBufferDock(QWidget *parent) : QFrame(parent)
 	outerLayout->addWidget(scrollArea);
 
 	LoadDestDir();
+	LoadRowDestDirs();
 	LoadBufferDuration();
 
 	refreshTimer = new QTimer(this);
@@ -178,6 +181,13 @@ void ReplayBufferDock::NotifyMainReplayStopped(qlonglong code)
 
 void ReplayBufferDock::NotifyMainReplaySaved()
 {
+	// Same fix as source-record.c's replay-saved handler: this only fires on
+	// a genuine success ("stop" with a non-success code is the failure path,
+	// handled above), but nothing previously cleared mainReplayError back to
+	// false here, so one failed save left the main row stuck red/"Error"
+	// even after saves started succeeding again.
+	mainReplayError = false;
+
 	if (!mainReplayOutputRef)
 		return;
 	proc_handler_t *ph = obs_output_get_proc_handler(mainReplayOutputRef);
@@ -214,8 +224,11 @@ void ReplayBufferDock::NotifyFilterReplaySaved(QString rowKey, QString path)
 
 void ReplayBufferDock::TrimAndReplace(const QString &rowKey, bool isMain, const QString &path, int seconds)
 {
+	const int idx = FindRowIndex(rowKey, isMain);
+	const QString &effectiveDestDir = (idx >= 0 && !rows[idx].rowDestDir.isEmpty()) ? rows[idx].rowDestDir : destDir;
+
 	std::string stdPath = path.toStdString();
-	std::string stdDestDir = destDir.toStdString();
+	std::string stdDestDir = effectiveDestDir.toStdString();
 	QPointer<ReplayBufferDock> self(this);
 	std::thread([self, rowKey, isMain, path, stdPath, seconds, stdDestDir]() {
 		const std::string trimmedPath = TrimReplayToLastSeconds(stdPath, seconds, stdDestDir);
@@ -276,6 +289,43 @@ void ReplayBufferDock::SaveDestDir()
 		QTextStream stream(&file);
 		stream << destDir;
 	}
+}
+
+void ReplayBufferDock::LoadRowDestDirs()
+{
+	char *cpath = obs_module_config_path("row-dest-dirs.json");
+	if (!cpath)
+		return;
+	QFile file(QString::fromUtf8(cpath));
+	bfree(cpath);
+	if (!file.open(QIODevice::ReadOnly))
+		return;
+
+	const QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
+	if (!doc.isObject())
+		return;
+
+	const QJsonObject obj = doc.object();
+	for (auto it = obj.constBegin(); it != obj.constEnd(); ++it)
+		rowDestDirs.insert(it.key(), it.value().toString());
+}
+
+void ReplayBufferDock::SaveRowDestDirs()
+{
+	char *cpath = obs_module_config_path("row-dest-dirs.json");
+	if (!cpath)
+		return;
+	const QString qpath = QString::fromUtf8(cpath);
+	bfree(cpath);
+
+	QJsonObject obj;
+	for (auto it = rowDestDirs.constBegin(); it != rowDestDirs.constEnd(); ++it)
+		obj.insert(it.key(), it.value());
+
+	QDir().mkpath(QFileInfo(qpath).absolutePath());
+	QFile file(qpath);
+	if (file.open(QIODevice::WriteOnly | QIODevice::Truncate))
+		file.write(QJsonDocument(obj).toJson(QJsonDocument::Compact));
 }
 
 void ReplayBufferDock::LoadBufferDuration()
@@ -420,6 +470,7 @@ int ReplayBufferDock::AddRow(bool isMain, const QString &key, const QString &lab
 	row.isMain = isMain;
 	row.key = key;
 	row.filterWeak = weak;
+	row.rowDestDir = rowDestDirs.value(label);
 
 	row.container = new QFrame(this);
 	row.container->setFrameShape(QFrame::NoFrame);
@@ -660,11 +711,11 @@ QString ReplayBufferDock::BuildRowsJson()
 		if (i)
 			json += QLatin1Char(',');
 		json += QStringLiteral("{\"key\":\"%1\",\"label\":\"%2\",\"is_main\":%3,\"length_seconds\":%4,"
-					"\"hotkey\":\"%5\",\"status\":%6}")
+					"\"hotkey\":\"%5\",\"status\":%6,\"dest_dir\":\"%7\"}")
 				.arg(JsonEscape(row.key), JsonEscape(row.nameLabel->text()),
 				     row.isMain ? QStringLiteral("true") : QStringLiteral("false"),
 				     QString::number(row.slider->value()), JsonEscape(row.hotkeyLabel->text()),
-				     QString::number(row.statusState));
+				     QString::number(row.statusState), JsonEscape(row.rowDestDir));
 	}
 	json += QStringLiteral("]}");
 	return json;
@@ -706,6 +757,32 @@ bool ReplayBufferDock::SetDestDirByPath(QString path)
 
 	destDir = trimmed;
 	SaveDestDir();
+	return true;
+}
+
+bool ReplayBufferDock::SetRowDestDirByKey(QString key, QString path)
+{
+	const bool isMain = key == QStringLiteral("main");
+	const int idx = FindRowIndex(key, isMain);
+	if (idx < 0)
+		return false;
+
+	const QString trimmed = path.trimmed();
+	if (!trimmed.isEmpty() && !QDir(trimmed).exists())
+		return false;
+
+	rows[idx].rowDestDir = trimmed;
+
+	// Keyed by Label, not Key -- persisted so the same override re-applies the
+	// next time this same-named filter is (re)discovered, e.g. after OBS
+	// restarts and hands it a new, unrelated Key.
+	const QString label = rows[idx].nameLabel->text();
+	if (trimmed.isEmpty())
+		rowDestDirs.remove(label);
+	else
+		rowDestDirs.insert(label, trimmed);
+	SaveRowDestDirs();
+
 	return true;
 }
 

@@ -29,6 +29,14 @@ struct ReplayRow {
 	QPushButton *saveButton = nullptr;
 	int statusState = 0; // 0 grey, 1 green, 2 red -- mirrors statusDot; kept for the websocket bridge
 
+	// Per-row override of where THIS row's trimmed clip lands (e.g. a specific
+	// subfolder within the companion app's clips folder, distinct from every
+	// other buffer's). Empty falls back to the dock-level shared destDir
+	// below. Set via SetRowDestDirByKey; persisted by Label in
+	// ReplayBufferDock::rowDestDirs since a row's Key isn't stable across
+	// restarts (see that field's own comment).
+	QString rowDestDir;
+
 	// Owned FilterSaveConnection*, connecting this filter's own "replay_saved"
 	// signal back to this row; null for the main row.
 	void *filterSaveConn = nullptr;
@@ -78,6 +86,13 @@ public slots:
 	// behalf.
 	bool SetDestDirByPath(QString path);
 
+	// Per-row override of SetDestDirByPath above -- lets one specific buffer's
+	// clips land somewhere different from the rest (e.g. a named subfolder per
+	// game/source). Empty path clears the override back to the shared destDir.
+	// Persisted by this row's Label and re-applied to it if rediscovered later
+	// (a new OBS session gives filters a new, unrelated Key).
+	bool SetRowDestDirByKey(QString key, QString path);
+
 	// Sets every currently-tracked Source Record filter's own *buffer* length
 	// (how much footage it keeps armed and flushes to disk in one shot on
 	// save) -- not the same thing as a row's trim slider above, which only
@@ -112,6 +127,9 @@ private:
 	void LoadDestDir();
 	void SaveDestDir();
 
+	void LoadRowDestDirs();
+	void SaveRowDestDirs();
+
 	void LoadBufferDuration();
 	void SaveBufferDuration();
 	static void ApplyBufferDurationToFilter(obs_weak_source_t *filterWeak, int seconds);
@@ -129,6 +147,12 @@ private:
 	// "leave the trimmed clip where the buffer wrote it" (the default file
 	// location). Set-only, via SetDestDirByPath -- see that method's comment.
 	QString destDir;
+
+	// label -> per-row destDir override, persisted across restarts (see
+	// ReplayRow::rowDestDir). Applied to a row the moment it's added, whether
+	// that's at startup or because a matching-labeled filter was just
+	// (re)discovered.
+	QMap<QString, QString> rowDestDirs;
 
 	// Default 30 min: long enough to actually reach back for most saves,
 	// short enough that a full flush to a RAM disk is a sub-second, low-risk

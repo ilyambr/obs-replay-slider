@@ -12,10 +12,17 @@ class ReplayBufferDock;
 //
 // Vendor requests:
 //   list_rows -> { "rows": [ { key, label, is_main, length_seconds, hotkey,
-//                  status (0 grey / 1 green / 2 red) }, ... ], "success": true }
+//                  status (0 grey / 1 green / 2 red), dest_dir }, ... ], "success": true }
 //   save_row  { "key": <row key> } -> { "success": bool, "error"?: string }
 //   set_row_length { "key": <row key>, "seconds": int } -> { "success": bool, "error"?: string }
-//   set_dest_dir { "path": <string> } -> { "success": bool } -- "" clears it
+//   set_dest_dir { "path": <string> } -> { "success": bool } -- "" clears it;
+//   applies to every row that doesn't have its own set_row_dest_dir override
+//   set_row_dest_dir { "key": <row key>, "path": <string> } -> { "success": bool,
+//   "error"?: string } -- per-row override of set_dest_dir above, e.g. a
+//   distinct subfolder for just this buffer's clips. "" clears back to the
+//   shared set_dest_dir value. Persisted by this row's label, so it re-applies
+//   to a same-named filter discovered again later (a new OBS session gives
+//   filters a new, unrelated key).
 //   set_buffer_duration { "seconds": int } -> { "success": bool } -- pushes a
 //   Source Record filter's own replay_duration (how much it buffers and
 //   flushes to disk on save), applied to every tracked filter and remembered
