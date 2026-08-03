@@ -16,8 +16,6 @@
 #include <QFrame>
 #include <QMainWindow>
 #include <QStatusBar>
-#include <QLineEdit>
-#include <QFileDialog>
 #include <QFile>
 #include <QTextStream>
 #include <QDir>
@@ -126,26 +124,15 @@ ReplayBufferDock::ReplayBufferDock(QWidget *parent) : QFrame(parent)
 	auto *outerLayout = new QVBoxLayout(this);
 	outerLayout->setContentsMargins(0, 0, 0, 0);
 
-	// Optional: where trimmed clips actually land. Meant for when the
-	// buffer's own output path is a RAM disk (fixes the multi-second stall
-	// writing/reading a large buffer file causes) -- the small trimmed clip
-	// then gets moved off it to somewhere persistent. Empty/default leaves
-	// clips exactly where they've always landed.
-	auto *destDirRow = new QHBoxLayout();
-	destDirRow->addWidget(new QLabel(QString::fromUtf8(obs_module_text("DestDirLabel")), this));
-	destDirEdit = new QLineEdit(this);
-	destDirEdit->setPlaceholderText(QString::fromUtf8(obs_module_text("DestDirPlaceholder")));
-	destDirRow->addWidget(destDirEdit, 1);
-	auto *browseButton = new QPushButton(QString::fromUtf8(obs_module_text("Browse")), this);
-	destDirRow->addWidget(browseButton);
-	outerLayout->addLayout(destDirRow);
-
-	connect(browseButton, &QPushButton::clicked, this, &ReplayBufferDock::BrowseForDestDir);
-	connect(destDirEdit, &QLineEdit::editingFinished, this, [this]() {
-		destDir = destDirEdit->text().trimmed();
-		SaveDestDir();
-	});
-
+	// Where trimmed clips actually land (e.g. moved off a RAM disk onto
+	// persistent storage) is set-only, via SetDestDirByPath over the
+	// websocket bridge -- there's no manual UI control for it here. RAM disk
+	// mounting only ever happens through the companion Backtrack app, and
+	// that app always pushes this field itself whenever it's running, which
+	// made a second, manually-editable copy of the same value redundant and
+	// a way for the two to disagree. With no companion app driving it, this
+	// just stays empty and clips land exactly where the buffer wrote them
+	// (the plain default-file-location behavior), same as always.
 	auto *content = new QWidget(this);
 	rowsLayout = new QVBoxLayout(content);
 
@@ -155,7 +142,7 @@ ReplayBufferDock::ReplayBufferDock(QWidget *parent) : QFrame(parent)
 	outerLayout->addWidget(scrollArea);
 
 	LoadDestDir();
-	destDirEdit->setText(destDir);
+	LoadBufferDuration();
 
 	refreshTimer = new QTimer(this);
 	connect(refreshTimer, &QTimer::timeout, this, &ReplayBufferDock::RefreshAll);
@@ -264,17 +251,6 @@ void ReplayBufferDock::NotifyTrimComplete(QString rowKey, bool isMain, QString f
 	WebsocketBridge::EmitRowSaved(rowKey, finalPath);
 }
 
-void ReplayBufferDock::BrowseForDestDir()
-{
-	const QString chosen = QFileDialog::getExistingDirectory(this, QString::fromUtf8(obs_module_text("DestDirLabel")),
-								  destDirEdit->text());
-	if (chosen.isEmpty())
-		return;
-	destDirEdit->setText(chosen);
-	destDir = chosen;
-	SaveDestDir();
-}
-
 void ReplayBufferDock::LoadDestDir()
 {
 	char *cpath = obs_module_config_path("dest-dir.txt");
@@ -300,6 +276,58 @@ void ReplayBufferDock::SaveDestDir()
 		QTextStream stream(&file);
 		stream << destDir;
 	}
+}
+
+void ReplayBufferDock::LoadBufferDuration()
+{
+	char *cpath = obs_module_config_path("buffer-duration.txt");
+	if (!cpath)
+		return;
+	QFile file(QString::fromUtf8(cpath));
+	bfree(cpath);
+	if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+		return;
+	bool ok = false;
+	const int seconds = QString::fromUtf8(file.readAll()).trimmed().toInt(&ok);
+	if (ok && seconds > 0)
+		bufferDurationSeconds = seconds;
+}
+
+void ReplayBufferDock::SaveBufferDuration()
+{
+	char *cpath = obs_module_config_path("buffer-duration.txt");
+	if (!cpath)
+		return;
+	const QString qpath = QString::fromUtf8(cpath);
+	bfree(cpath);
+
+	QDir().mkpath(QFileInfo(qpath).absolutePath());
+	QFile file(qpath);
+	if (file.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
+		QTextStream stream(&file);
+		stream << bufferDurationSeconds;
+	}
+}
+
+// Static: called from AddRow (no live ReplayRow to read a slider off of yet)
+// as well as from SetBufferDurationSeconds. obs_source_update merges these
+// keys into the filter's existing settings and, per source-record.c's own
+// update handler, tears down and restarts just the replay output with the
+// new duration if it actually changed -- this mirrors exactly what happens
+// when a user drags the filter's own "replay_duration" slider in its
+// Properties dialog, just triggered externally instead.
+void ReplayBufferDock::ApplyBufferDurationToFilter(obs_weak_source_t *filterWeak, int seconds)
+{
+	if (!filterWeak)
+		return;
+	obs_source_t *strong = obs_weak_source_get_source(filterWeak);
+	if (!strong)
+		return;
+	obs_data_t *settings = obs_data_create();
+	obs_data_set_int(settings, "replay_duration", seconds);
+	obs_source_update(strong, settings);
+	obs_data_release(settings);
+	obs_source_release(strong);
 }
 
 void ReplayBufferDock::FrontendEventCallback(enum obs_frontend_event event, void *data)
@@ -434,8 +462,14 @@ int ReplayBufferDock::AddRow(bool isMain, const QString &key, const QString &lab
 	const int index = rows.size();
 	rows.push_back(row);
 
-	if (!isMain)
+	if (!isMain) {
 		ConnectFilterSaveSignal(rows[index]);
+		// A freshly-discovered filter still has whatever replay_duration it was
+		// last saved with in the scene file (or the plugin's own hardcoded
+		// default) -- push our configured length onto it now so newly-added
+		// filters don't silently reintroduce an oversized buffer.
+		ApplyBufferDurationToFilter(weak, bufferDurationSeconds);
+	}
 
 	const QString rowKey = key;
 	const bool rowIsMain = isMain;
@@ -671,8 +705,22 @@ bool ReplayBufferDock::SetDestDirByPath(QString path)
 		return false;
 
 	destDir = trimmed;
-	destDirEdit->setText(trimmed);
 	SaveDestDir();
+	return true;
+}
+
+bool ReplayBufferDock::SetBufferDurationSeconds(int seconds)
+{
+	if (seconds <= 0)
+		return false;
+
+	bufferDurationSeconds = seconds;
+	SaveBufferDuration();
+
+	for (const ReplayRow &row : rows) {
+		if (!row.isMain)
+			ApplyBufferDurationToFilter(row.filterWeak, seconds);
+	}
 	return true;
 }
 

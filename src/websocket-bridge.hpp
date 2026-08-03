@@ -15,6 +15,11 @@ class ReplayBufferDock;
 //                  status (0 grey / 1 green / 2 red) }, ... ], "success": true }
 //   save_row  { "key": <row key> } -> { "success": bool, "error"?: string }
 //   set_row_length { "key": <row key>, "seconds": int } -> { "success": bool, "error"?: string }
+//   set_dest_dir { "path": <string> } -> { "success": bool } -- "" clears it
+//   set_buffer_duration { "seconds": int } -> { "success": bool } -- pushes a
+//   Source Record filter's own replay_duration (how much it buffers and
+//   flushes to disk on save), applied to every tracked filter and remembered
+//   for any discovered later. Does not touch the main OBS replay buffer.
 //
 // Vendor event:
 //   row_saved { "key": <row key>, "path": <string> } -- emitted once a row's

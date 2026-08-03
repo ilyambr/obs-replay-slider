@@ -14,7 +14,6 @@ class QSlider;
 class QLabel;
 class QTimer;
 class QPushButton;
-class QLineEdit;
 
 struct ReplayRow {
 	bool isMain = false;
@@ -79,6 +78,15 @@ public slots:
 	// behalf.
 	bool SetDestDirByPath(QString path);
 
+	// Sets every currently-tracked Source Record filter's own *buffer* length
+	// (how much footage it keeps armed and flushes to disk in one shot on
+	// save) -- not the same thing as a row's trim slider above, which only
+	// controls how much of that flush survives afterward. Remembered and
+	// re-applied to any filter discovered later too. Never touches the main
+	// OBS replay buffer's own "Maximum Replay Time" (Settings > Output),
+	// which isn't a source_record_filter and has no equivalent API here.
+	bool SetBufferDurationSeconds(int seconds);
+
 private slots:
 	void RefreshAll();
 
@@ -101,9 +109,12 @@ private:
 	void ReacquireMainOutput();
 	void ReleaseMainOutput();
 
-	void BrowseForDestDir();
 	void LoadDestDir();
 	void SaveDestDir();
+
+	void LoadBufferDuration();
+	void SaveBufferDuration();
+	static void ApplyBufferDurationToFilter(obs_weak_source_t *filterWeak, int seconds);
 
 	static void SetStatusDot(QLabel *dot, int state); // 0 grey, 1 green, 2 red
 	static void FrontendEventCallback(enum obs_frontend_event event, void *data);
@@ -115,9 +126,15 @@ private:
 
 	// Optional: where trimmed clips actually land, e.g. a persistent SSD
 	// folder when the buffer's own output path is a RAM disk. Empty means
-	// "leave the trimmed clip where the buffer wrote it" (the old behavior).
-	QLineEdit *destDirEdit = nullptr;
+	// "leave the trimmed clip where the buffer wrote it" (the default file
+	// location). Set-only, via SetDestDirByPath -- see that method's comment.
 	QString destDir;
+
+	// Default 30 min: long enough to actually reach back for most saves,
+	// short enough that a full flush to a RAM disk is a sub-second, low-risk
+	// write rather than a multi-GB burst that can stutter the game it's
+	// capturing. Companion app UI lets this go up to 60 min with a warning.
+	int bufferDurationSeconds = 1800;
 
 	obs_output_t *mainReplayOutputRef = nullptr;
 	bool mainReplayError = false;
