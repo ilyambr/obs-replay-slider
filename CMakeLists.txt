@@ -40,6 +40,29 @@ if(OS_WINDOWS)
   )
   install(FILES "$<TARGET_FILE:FFmpeg::avformat>" "$<TARGET_FILE:FFmpeg::avcodec>" "$<TARGET_FILE:FFmpeg::avutil>"
           DESTINATION "${CMAKE_PROJECT_NAME}/bin/64bit" COMPONENT Runtime)
+
+  # Same reasoning, different dependency: replay-slider.dll also links the
+  # MSVC C/C++ runtime (MSVCP140.dll, VCRUNTIME140.dll, VCRUNTIME140_1.dll),
+  # which is only guaranteed present if the end user's machine already has the
+  # matching Visual C++ 2015-2022 Redistributable installed. A dev machine
+  # (or anything that's ever installed Visual Studio, a game using the same
+  # runtime, etc.) almost always has it already, silently masking this as a
+  # problem -- a "bare" end-user PC that's never needed it does not, and hits
+  # the exact same LoadLibrary error 126 the FFmpeg DLLs did. CMake's own
+  # InstallRequiredSystemLibraries resolves the correct DLLs for whatever
+  # toolchain actually built this, rather than hardcoding filenames/versions.
+  set(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS_SKIP TRUE)
+  include(InstallRequiredSystemLibraries)
+  if(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS)
+    add_custom_command(
+      TARGET ${CMAKE_PROJECT_NAME}
+      POST_BUILD
+      COMMAND "${CMAKE_COMMAND}" -E copy_if_different ${CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS} "$<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>"
+      COMMENT "Bundling the MSVC runtime alongside ${CMAKE_PROJECT_NAME}"
+      VERBATIM
+    )
+    install(FILES ${CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS} DESTINATION "${CMAKE_PROJECT_NAME}/bin/64bit" COMPONENT Runtime)
+  endif()
 endif()
 
 if(ENABLE_FRONTEND_API)
