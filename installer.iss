@@ -44,8 +44,17 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 ; system-wide "Program Files\obs-studio" install (like real OBS's own
 ; obs-plugins/data layout) expects the classic flat layout instead, so remap
 ; it here rather than dumping the nested folder as-is.
-Source: "release\{#ConfigDir}\replay-slider\bin\64bit\replay-slider.dll"; DestDir: "{app}\obs-plugins\64bit"; Flags: ignoreversion
-Source: "release\{#ConfigDir}\replay-slider\bin\64bit\replay-slider.pdb"; DestDir: "{app}\obs-plugins\64bit"; Flags: ignoreversion skipifsourcedoesntexist
+;
+; Wildcard, not named files -- this used to list replay-slider.dll/.pdb by
+; name only, which silently left every bundled runtime dependency (FFmpeg's
+; avformat/avcodec/avutil, the MSVC redistributable) out of the INSTALLER
+; specifically, even after they were added to the CMake install() rules and
+; correctly ended up in the .zip package (built separately, via a wildcard
+; copy). Anyone using the .exe installer instead of the .zip kept hitting
+; the exact "module not found" failure those DLLs were bundled to fix, no
+; matter how many times the underlying build got fixed, because the
+; installer's own file list never actually picked them up.
+Source: "release\{#ConfigDir}\replay-slider\bin\64bit\*"; DestDir: "{app}\obs-plugins\64bit"; Flags: ignoreversion recursesubdirs
 Source: "release\{#ConfigDir}\replay-slider\data\*"; DestDir: "{app}\data\obs-plugins\replay-slider"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; NOTE: Don't use "Flags: ignoreversion" on any shared system files
 
