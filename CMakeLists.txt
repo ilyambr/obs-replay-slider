@@ -17,8 +17,8 @@ find_package(libobs REQUIRED)
 target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE OBS::libobs)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/finders")
-find_package(FFmpeg REQUIRED COMPONENTS avformat avcodec avutil)
-target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE FFmpeg::avformat FFmpeg::avcodec FFmpeg::avutil)
+find_package(FFmpeg REQUIRED COMPONENTS avformat avcodec avutil swresample)
+target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE FFmpeg::avformat FFmpeg::avcodec FFmpeg::avutil FFmpeg::swresample)
 
 # OBS itself also links FFmpeg, but there's no guarantee its own bundled
 # avcodec/avformat/avutil DLLs are the exact same version this plugin was
@@ -28,17 +28,29 @@ target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE FFmpeg::avformat FFmpeg::avc
 # different-versioned DLL doesn't satisfy an import by name. Bundling our own
 # copies next to the plugin removes the dependency on OBS's version entirely --
 # Windows checks the loading DLL's own folder before anywhere else.
+#
+# swresample-N.dll specifically: avcodec-61.dll itself imports swresample by
+# name (e.g. swresample-5.dll), so it's a transitive dependency of a
+# dependency, not just a direct one -- easy to miss by only looking at what
+# replay-slider.dll itself imports. Missing it produces the exact same error
+# 126 as the other three, because Windows fails the whole load chain the
+# moment any one link (however deep) can't be resolved. Confirmed as the
+# actual last missing piece via a real end-user machine whose OBS install
+# only shipped swresample-6.dll, not the swresample-5.dll our avcodec build
+# needs -- OBS's own copy doesn't help if it's the wrong SONAME version, same
+# as avcodec/avformat/avutil before it.
 if(OS_WINDOWS)
   add_custom_command(
     TARGET ${CMAKE_PROJECT_NAME}
     POST_BUILD
     COMMAND
       "${CMAKE_COMMAND}" -E copy_if_different "$<TARGET_FILE:FFmpeg::avformat>" "$<TARGET_FILE:FFmpeg::avcodec>"
-      "$<TARGET_FILE:FFmpeg::avutil>" "$<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>"
+      "$<TARGET_FILE:FFmpeg::avutil>" "$<TARGET_FILE:FFmpeg::swresample>" "$<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>"
     COMMENT "Bundling FFmpeg runtime DLLs alongside ${CMAKE_PROJECT_NAME}"
     VERBATIM
   )
   install(FILES "$<TARGET_FILE:FFmpeg::avformat>" "$<TARGET_FILE:FFmpeg::avcodec>" "$<TARGET_FILE:FFmpeg::avutil>"
+                "$<TARGET_FILE:FFmpeg::swresample>"
           DESTINATION "${CMAKE_PROJECT_NAME}/bin/64bit" COMPONENT Runtime)
 
   # Same reasoning, different dependency: replay-slider.dll also links the
