@@ -100,6 +100,10 @@ target_sources(
   PRIVATE src/plugin-main.cpp
           src/replay-buffer-dock.cpp
           src/replay-buffer-dock.hpp
+          src/control-panel-dock.cpp
+          src/control-panel-dock.hpp
+          src/source-record-discovery.cpp
+          src/source-record-discovery.hpp
           src/hotkey-lookup.cpp
           src/hotkey-lookup.hpp
           src/clip-trim.cpp
