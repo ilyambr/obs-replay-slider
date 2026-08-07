@@ -53,9 +53,24 @@ QString JsonEscape(const QString &s)
 
 // Named (not a lambda) so the exact same pointer can be used to both connect
 // and later disconnect from the main replay buffer output's signals.
+//
+// libobs's signal_handler_disconnect() only prevents a callback from being
+// dispatched again in the future -- it does not wait for an invocation
+// already dispatched to a *different* thread to finish. ReleaseMainOutput()
+// (called from the dock's own destructor) disconnects these and then lets
+// `this` be destroyed right after; without the mutex below, an in-flight
+// call on the output's own thread could still be executing
+// QMetaObject::invokeMethod(dock, ...) against an already/concurrently-
+// destroyed dock. mainOutputCallbackMutex forces ReleaseMainOutput() to wait
+// for any such in-flight call to finish before it (and the destructor
+// following it) can proceed, by having both sides hold the same mutex for
+// their entire critical section.
 void MainReplayStoppedSignalCallback(void *data, calldata_t *cd)
 {
 	auto *dock = static_cast<ReplayBufferDock *>(data);
+	std::lock_guard<std::mutex> lock(dock->mainOutputCallbackMutex);
+	if (!dock->mainOutputCallbacksActive)
+		return;
 	const long long code = calldata_int(cd, "code");
 	QMetaObject::invokeMethod(dock, "NotifyMainReplayStopped", Qt::QueuedConnection, Q_ARG(qlonglong, code));
 }
@@ -64,20 +79,38 @@ void MainReplaySavedSignalCallback(void *data, calldata_t *cd)
 {
 	UNUSED_PARAMETER(cd);
 	auto *dock = static_cast<ReplayBufferDock *>(data);
+	std::lock_guard<std::mutex> lock(dock->mainOutputCallbackMutex);
+	if (!dock->mainOutputCallbacksActive)
+		return;
 	QMetaObject::invokeMethod(dock, "NotifyMainReplaySaved", Qt::QueuedConnection);
 }
 
 // Ties a Source Record filter's "replay_saved" signal connection back to the
 // dock and the specific row it belongs to. Owned by that row's
 // ReplayRow::filterSaveConn for as long as the connection is live.
+//
+// Deliberately never deleted (see DisconnectFilterSaveSignal) -- the same
+// signal_handler_disconnect-doesn't-wait hazard as the main output's signals
+// above applies here too, but there's no single long-lived object (like the
+// dock itself) to hold a mutex on: each of these is its own small per-row
+// heap allocation. Rather than free it and risk a callback already
+// dispatched to another thread reading it mid-free, each instance carries
+// its own mutex/active flag and is simply retired in place -- these are tiny
+// (a mutex, a bool, a pointer, a QString) and only created once per row
+// add/rediscovery, not a meaningful leak even over a long streaming session.
 struct FilterSaveConnection {
-	ReplayBufferDock *dock;
+	std::mutex mutex;
+	bool active = true;
+	ReplayBufferDock *dock = nullptr;
 	QString rowKey;
 };
 
 void FilterReplaySavedSignalCallback(void *data, calldata_t *cd)
 {
 	auto *conn = static_cast<FilterSaveConnection *>(data);
+	std::lock_guard<std::mutex> lock(conn->mutex);
+	if (!conn->active)
+		return;
 	const char *path = calldata_string(cd, "path");
 	const QString qpath = path ? QString::fromUtf8(path) : QString();
 	QMetaObject::invokeMethod(conn->dock, "NotifyFilterReplaySaved", Qt::QueuedConnection, Q_ARG(QString, conn->rowKey),
@@ -371,6 +404,17 @@ void ReplayBufferDock::ReleaseMainOutput()
 		signal_handler_disconnect(sh, "stop", MainReplayStoppedSignalCallback, this);
 		signal_handler_disconnect(sh, "saved", MainReplaySavedSignalCallback, this);
 	}
+	// signal_handler_disconnect only stops FUTURE dispatches -- it doesn't
+	// wait for a call already dispatched to another thread to finish. Taking
+	// this same mutex (which the callbacks hold for their entire body, see
+	// MainReplayStoppedSignalCallback/MainReplaySavedSignalCallback above)
+	// blocks here until any such in-flight call has completed, so `this` is
+	// never touched by a callback after this function returns -- required
+	// since this runs from the destructor right before `this` goes away.
+	{
+		std::lock_guard<std::mutex> lock(mainOutputCallbackMutex);
+		mainOutputCallbacksActive = false;
+	}
 	obs_output_release(mainReplayOutputRef);
 	mainReplayOutputRef = nullptr;
 }
@@ -384,6 +428,10 @@ void ReplayBufferDock::ReacquireMainOutput()
 
 	signal_handler_t *sh = obs_output_get_signal_handler(mainReplayOutputRef);
 	if (sh) {
+		{
+			std::lock_guard<std::mutex> lock(mainOutputCallbackMutex);
+			mainOutputCallbacksActive = true;
+		}
 		signal_handler_connect(sh, "stop", MainReplayStoppedSignalCallback, this);
 		signal_handler_connect(sh, "saved", MainReplaySavedSignalCallback, this);
 	}
@@ -399,7 +447,9 @@ void ReplayBufferDock::ConnectFilterSaveSignal(ReplayRow &row)
 		return;
 	signal_handler_t *sh = obs_source_get_signal_handler(strong);
 	if (sh) {
-		auto *conn = new FilterSaveConnection{this, row.key};
+		auto *conn = new FilterSaveConnection();
+		conn->dock = this;
+		conn->rowKey = row.key;
 		signal_handler_connect(sh, "replay_saved", FilterReplaySavedSignalCallback, conn);
 		row.filterSaveConn = conn;
 	}
@@ -418,7 +468,16 @@ void ReplayBufferDock::DisconnectFilterSaveSignal(ReplayRow &row)
 			signal_handler_disconnect(sh, "replay_saved", FilterReplaySavedSignalCallback, conn);
 		obs_source_release(strong);
 	}
-	delete conn;
+	// Not deleted -- see the comment on FilterSaveConnection's definition.
+	// Marking it inactive under its own mutex is what actually matters: it
+	// blocks here until any callback already in flight on another thread has
+	// finished reading conn->dock/rowKey (or, if none is in flight yet,
+	// ensures a future one -- impossible after signal_handler_disconnect
+	// above, but belt-and-suspenders -- would see active=false and no-op).
+	{
+		std::lock_guard<std::mutex> lock(conn->mutex);
+		conn->active = false;
+	}
 	row.filterSaveConn = nullptr;
 }
 

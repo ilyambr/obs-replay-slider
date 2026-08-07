@@ -222,12 +222,26 @@ std::string TrimReplayToLastSeconds(const std::string &path, int seconds, const 
 	if (avformat_write_header(out.ctx, nullptr) < 0)
 		return std::string();
 
-	// Each stream's first packet after the seek becomes its new zero point.
-	// pts and dts must be shifted by the SAME offset per stream -- using
-	// independent offsets breaks the pts/dts ordering on B-frame streams
-	// (dts stays monotonic and precedes pts) and libavformat rejects the
-	// resulting packets with "pts < dts in stream N".
-	std::vector<int64_t> offset(in.ctx->nb_streams, AV_NOPTS_VALUE);
+	// Every stream shares ONE reference point -- the real seek target (in
+	// AV_TIME_BASE units), converted into each stream's own time_base --
+	// rather than each stream picking its own first packet observed after
+	// the seek as its zero point. av_seek_frame only lands at/near the
+	// target, and keyframe-driven seeking means the video and audio
+	// streams' actual first post-seek packets essentially never share the
+	// same real timestamp, so zeroing each stream independently baked a
+	// constant, stream-dependent audio/video sync offset into every
+	// trimmed clip. pts and dts still get shifted by the SAME (per-stream)
+	// offset -- using different offsets for pts vs dts breaks their
+	// ordering on B-frame streams (dts stays monotonic and precedes pts)
+	// and libavformat rejects the resulting packets with "pts < dts in
+	// stream N" -- this only changes what that per-stream offset is
+	// derived from.
+	std::vector<int64_t> offset(in.ctx->nb_streams, 0);
+	for (unsigned i = 0; i < in.ctx->nb_streams; i++) {
+		if (streamMapping[i] < 0)
+			continue;
+		offset[i] = av_rescale_q(seekTarget, AV_TIME_BASE_Q, in.ctx->streams[i]->time_base);
+	}
 
 	AVPacket pkt;
 	bool ok = true;
@@ -236,15 +250,6 @@ std::string TrimReplayToLastSeconds(const std::string &path, int seconds, const 
 		if (inIdx < 0 || static_cast<unsigned>(inIdx) >= in.ctx->nb_streams || streamMapping[inIdx] < 0) {
 			av_packet_unref(&pkt);
 			continue;
-		}
-
-		if (offset[inIdx] == AV_NOPTS_VALUE) {
-			if (pkt.dts != AV_NOPTS_VALUE)
-				offset[inIdx] = pkt.dts;
-			else if (pkt.pts != AV_NOPTS_VALUE)
-				offset[inIdx] = pkt.pts;
-			else
-				offset[inIdx] = 0;
 		}
 
 		AVStream *inStream = in.ctx->streams[inIdx];

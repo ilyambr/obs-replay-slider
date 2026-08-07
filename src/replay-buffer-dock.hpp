@@ -9,6 +9,8 @@
 #include <QString>
 #include <QSize>
 
+#include <mutex>
+
 class QVBoxLayout;
 class QSlider;
 class QLabel;
@@ -162,4 +164,16 @@ private:
 
 	obs_output_t *mainReplayOutputRef = nullptr;
 	bool mainReplayError = false;
-};
+
+public:
+	// Guards MainReplayStoppedSignalCallback/MainReplaySavedSignalCallback's
+	// use of `this` against ReleaseMainOutput() destroying it concurrently --
+	// see the comment on ReleaseMainOutput() for why this can't just be a
+	// disconnect-then-proceed like it looks like it should be. Public rather
+	// than friended to the (anonymous-namespace-scoped) callback functions,
+	// since a `friend` declaration here can't reliably name a function
+	// defined inside an unnamed namespace in a different translation unit.
+	std::mutex mainOutputCallbackMutex;
+	bool mainOutputCallbacksActive = false;
+
+private:
