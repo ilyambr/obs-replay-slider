@@ -175,5 +175,4 @@ public:
 	// defined inside an unnamed namespace in a different translation unit.
 	std::mutex mainOutputCallbackMutex;
 	bool mainOutputCallbacksActive = false;
-
-private:
+};
