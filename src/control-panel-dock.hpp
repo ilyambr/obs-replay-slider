@@ -27,6 +27,7 @@ struct ControlRow {
 	// output stopped with a failure). Last known value, so the button only
 	// needs restyling on an actual change.
 	int status = 0;
+	QString lastOutputPath;
 };
 
 // A second, general-purpose control panel dock alongside ReplayBufferDock --

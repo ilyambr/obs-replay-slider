@@ -251,6 +251,7 @@ void ControlPanelDock::UpdateRow(ControlRow &row)
 
 	bool active = false;
 	bool error = false;
+	QString path;
 	proc_handler_t *ph = obs_source_get_proc_handler(strong);
 	if (ph) {
 		calldata_t cd;
@@ -258,10 +259,15 @@ void ControlPanelDock::UpdateRow(ControlRow &row)
 		if (proc_handler_call(ph, "get_record_status", &cd)) {
 			active = calldata_bool(&cd, "active");
 			error = calldata_bool(&cd, "error");
+			const char *pathStr = calldata_string(&cd, "path");
+			if (pathStr)
+				path = QString::fromUtf8(pathStr);
 		}
 		calldata_free(&cd);
 	}
 	obs_source_release(strong);
+
+	row.lastOutputPath = path;
 
 	const int status = active ? kStatusRecording : error ? kStatusError : kStatusStopped;
 
@@ -296,9 +302,9 @@ QString ControlPanelDock::BuildRowsJson()
 			obs_source_release(strong);
 		}
 
-		json += QStringLiteral("{\"key\":\"%1\",\"label\":\"%2\",\"status\":%3,\"source\":\"%4\",\"filter\":\"%5\"}")
+		json += QStringLiteral("{\"key\":\"%1\",\"label\":\"%2\",\"status\":%3,\"source\":\"%4\",\"filter\":\"%5\",\"path\":\"%6\"}")
 				.arg(JsonEscape(row.key), JsonEscape(row.nameLabel->text()), QString::number(row.status),
-				     JsonEscape(sourceName), JsonEscape(filterName));
+				     JsonEscape(sourceName), JsonEscape(filterName), JsonEscape(row.lastOutputPath));
 	}
 	json += QStringLiteral("]}");
 	return json;
