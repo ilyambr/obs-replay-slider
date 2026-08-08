@@ -271,6 +271,12 @@ void ControlPanelDock::UpdateRow(ControlRow &row)
 	}
 }
 
+// source/filter are the parent source's and the filter's own obs_source_get_name(),
+// separate from the "{source} - {filter}" concatenated display label -- so a caller
+// (e.g. Backtrack) can reliably look up this filter's settings via the plain
+// obs-websocket GetSourceFilterList/SetSourceFilterSettings requests (source name +
+// filter name) without parsing the label string, which isn't safe to split on
+// " - " if either name happens to contain that substring itself.
 QString ControlPanelDock::BuildRowsJson()
 {
 	QString json = QStringLiteral("{\"rows\":[");
@@ -278,8 +284,21 @@ QString ControlPanelDock::BuildRowsJson()
 		const ControlRow &row = rows[i];
 		if (i)
 			json += QLatin1Char(',');
-		json += QStringLiteral("{\"key\":\"%1\",\"label\":\"%2\",\"status\":%3}")
-				.arg(JsonEscape(row.key), JsonEscape(row.nameLabel->text()), QString::number(row.status));
+
+		QString sourceName;
+		QString filterName;
+		obs_source_t *strong = obs_weak_source_get_source(row.filterWeak);
+		if (strong) {
+			filterName = QString::fromUtf8(obs_source_get_name(strong));
+			obs_source_t *parent = obs_filter_get_parent(strong); // borrowed, no release
+			if (parent)
+				sourceName = QString::fromUtf8(obs_source_get_name(parent));
+			obs_source_release(strong);
+		}
+
+		json += QStringLiteral("{\"key\":\"%1\",\"label\":\"%2\",\"status\":%3,\"source\":\"%4\",\"filter\":\"%5\"}")
+				.arg(JsonEscape(row.key), JsonEscape(row.nameLabel->text()), QString::number(row.status),
+				     JsonEscape(sourceName), JsonEscape(filterName));
 	}
 	json += QStringLiteral("]}");
 	return json;

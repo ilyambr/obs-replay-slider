@@ -30,14 +30,18 @@ class ControlPanelDock;
 //   flushes to disk on save), applied to every tracked filter and remembered
 //   for any discovered later. Does not touch the main OBS replay buffer.
 //
-//   list_record_rows -> { "rows": [ { key, label, status }, ... ], "success": true }
-//   -- one row per discovered Source Record filter (see ControlPanelDock),
-//   independent of list_rows above: no "main" row here, since ControlPanelDock
-//   itself doesn't track the main OBS recording, only per-filter ones.
-//   status is 0 Inactive (currently unused -- see control-panel-dock.cpp's
-//   UpdateRow for why the "source has nothing to capture" check this was
-//   meant for got reverted), 1 Stopped (record_mode off), 2 Recording, or 3
-//   Error (record_mode was on and the output stopped with a failure).
+//   list_record_rows -> { "rows": [ { key, label, status, source, filter }, ... ],
+//   "success": true } -- one row per discovered Source Record filter (see
+//   ControlPanelDock), independent of list_rows above: no "main" row here,
+//   since ControlPanelDock itself doesn't track the main OBS recording, only
+//   per-filter ones. status is 0 Inactive (currently unused -- see
+//   control-panel-dock.cpp's UpdateRow for why the "source has nothing to
+//   capture" check this was meant for got reverted), 1 Stopped (record_mode
+//   off), 2 Recording, or 3 Error (record_mode was on and the output stopped
+//   with a failure). source/filter are the parent source's and the filter's
+//   own names -- use these (not label) to look up this filter's settings
+//   (e.g. its configured output path) via the plain obs-websocket
+//   GetSourceFilterList/SetSourceFilterSettings requests.
 //   start_record_row { "key": <row key> } -> { "success": bool, "error"?: string }
 //   stop_record_row  { "key": <row key> } -> { "success": bool, "error"?: string }
 //   -- same as clicking that row's Record button in ControlPanelDock itself.
