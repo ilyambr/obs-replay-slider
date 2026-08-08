@@ -19,8 +19,7 @@ struct ControlRow {
 	QString key;                             // filter source's address-derived id, see RefreshAll()
 
 	QFrame *container = nullptr; // owns everything below; the only thing added to the outer layout
-	QLabel *nameLabel = nullptr;
-	QLabel *statusDot = nullptr;
+	QLabel *nameLabel = nullptr; // caption under the button, like the source's name under a native control
 	QPushButton *recordButton = nullptr;
 	bool recordActive = false; // last known state, so the button only needs restyling on change
 };
@@ -30,6 +29,11 @@ struct ControlRow {
 // than the replay-buffer/save-length workflow that dock already owns. Starts
 // with per-filter Record start/stop; the row/button plumbing here is meant to
 // grow more controls over time without needing a new dock per idea.
+//
+// Styled to read as an extension of OBS's own Controls dock rather than a
+// distinct plugin UI: full-width buttons, "active" shown by highlighting the
+// button itself (checked state, using the current Qt theme's own highlight
+// color) instead of a separate status dot, source name captioned underneath.
 class ControlPanelDock : public QFrame {
 	Q_OBJECT
 
@@ -37,7 +41,7 @@ public:
 	explicit ControlPanelDock(QWidget *parent = nullptr);
 	~ControlPanelDock() override;
 
-	QSize sizeHint() const override { return QSize(360, 160); }
+	QSize sizeHint() const override { return QSize(240, 160); }
 
 private slots:
 	void RefreshAll();
@@ -50,7 +54,7 @@ private:
 	void UpdateRow(ControlRow &row);
 	void ToggleRecord(obs_weak_source_t *filterWeak, bool start);
 
-	static void SetStatusDot(QLabel *dot, int state); // 0 grey, 1 green
+	void ApplyButtonState(QPushButton *button, bool active);
 
 	QVBoxLayout *rowsLayout = nullptr;
 	QTimer *refreshTimer = nullptr;

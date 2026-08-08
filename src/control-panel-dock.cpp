@@ -4,13 +4,15 @@
 #include <obs-module.h>
 
 #include <QVBoxLayout>
-#include <QHBoxLayout>
 #include <QScrollArea>
 #include <QLabel>
 #include <QTimer>
 #include <QPushButton>
 #include <QMap>
 #include <QStringList>
+#include <QFont>
+#include <QPalette>
+#include <QColor>
 
 // Mirrors OUTPUT_MODE_NONE / OUTPUT_MODE_ALWAYS from obs-source-record's
 // source-record.c -- not exposed via a shared header (source-record.h is
@@ -72,16 +74,35 @@ int ControlPanelDock::AddRow(const QString &key, const QString &label, obs_weak_
 	row.container = new QFrame(this);
 	row.container->setFrameShape(QFrame::NoFrame);
 
-	row.nameLabel = new QLabel(label, row.container);
-	row.statusDot = new QLabel(row.container);
-	row.statusDot->setFixedSize(14, 14);
+	// Full-width, checkable button on top (same shape as OBS's own Controls
+	// dock buttons), with the source's name captioned underneath -- rather
+	// than a name/dot/button row -- so this reads as an extension of that
+	// dock instead of a distinct plugin widget.
 	row.recordButton = new QPushButton(QString::fromUtf8(obs_module_text("StartRecord")), row.container);
-	SetStatusDot(row.statusDot, 0);
+	row.recordButton->setCheckable(true);
+	row.recordButton->setMinimumHeight(28);
 
-	auto *rowLayout = new QHBoxLayout(row.container);
-	rowLayout->addWidget(row.nameLabel, 1);
-	rowLayout->addWidget(row.statusDot);
+	row.nameLabel = new QLabel(label, row.container);
+	row.nameLabel->setAlignment(Qt::AlignHCenter);
+	{
+		QFont f = row.nameLabel->font();
+		f.setPointSizeF(f.pointSizeF() * 0.9);
+		row.nameLabel->setFont(f);
+	}
+	// Muted relative to normal text, same as a caption -- matches the
+	// hotkey/status labels ReplayBufferDock already dims via its own palette.
+	QPalette mutedPalette = row.nameLabel->palette();
+	QColor mutedColor = mutedPalette.color(QPalette::WindowText);
+	mutedColor.setAlpha(160);
+	mutedPalette.setColor(QPalette::WindowText, mutedColor);
+	row.nameLabel->setPalette(mutedPalette);
+
+	ApplyButtonState(row.recordButton, false);
+
+	auto *rowLayout = new QVBoxLayout(row.container);
+	rowLayout->setSpacing(2);
 	rowLayout->addWidget(row.recordButton);
+	rowLayout->addWidget(row.nameLabel);
 
 	rowsLayout->insertWidget(static_cast<int>(rows.size()), row.container);
 
@@ -104,7 +125,7 @@ void ControlPanelDock::RebuildRows(const QMap<QString, obs_weak_source_t *> &dis
 	for (auto &row : rows) {
 		if (row.filterWeak)
 			obs_weak_source_release(row.filterWeak);
-		delete row.container; // also deletes nameLabel/statusDot/recordButton
+		delete row.container; // also deletes nameLabel/recordButton
 	}
 	rows.clear();
 
@@ -186,7 +207,7 @@ void ControlPanelDock::UpdateRow(ControlRow &row)
 {
 	obs_source_t *strong = obs_weak_source_get_source(row.filterWeak);
 	if (!strong) {
-		SetStatusDot(row.statusDot, 0);
+		ApplyButtonState(row.recordButton, false);
 		return;
 	}
 
@@ -203,10 +224,8 @@ void ControlPanelDock::UpdateRow(ControlRow &row)
 
 	if (active != row.recordActive) {
 		row.recordActive = active;
-		row.recordButton->setText(
-			QString::fromUtf8(obs_module_text(active ? "StopRecord" : "StartRecord")));
+		ApplyButtonState(row.recordButton, active);
 	}
-	SetStatusDot(row.statusDot, active ? 1 : 0);
 }
 
 void ControlPanelDock::ToggleRecord(obs_weak_source_t *filterWeak, bool start)
@@ -228,8 +247,23 @@ void ControlPanelDock::ToggleRecord(obs_weak_source_t *filterWeak, bool start)
 	obs_source_release(strong);
 }
 
-void ControlPanelDock::SetStatusDot(QLabel *dot, int state)
+// "Active" is shown by highlighting the button itself -- like OBS's own
+// "Stop Recording" button when a recording is running -- rather than a
+// separate status dot. setChecked() alone would already pick up whatever
+// checked-state styling the active Qt/OBS theme applies to QPushButton, but
+// that's easy to lose track of across themes, so pin it explicitly to the
+// theme's own highlight color rather than a hardcoded blue: stays correct
+// whether OBS is in a dark, light, or fully custom theme.
+void ControlPanelDock::ApplyButtonState(QPushButton *button, bool active)
 {
-	const char *color = state == 1 ? "#2ecc71" : "#808080";
-	dot->setStyleSheet(QStringLiteral("background-color: %1; border-radius: 7px;").arg(QString::fromUtf8(color)));
+	button->setChecked(active);
+	button->setText(QString::fromUtf8(obs_module_text(active ? "StopRecord" : "StartRecord")));
+	if (active) {
+		const QColor highlight = button->palette().color(QPalette::Highlight);
+		const QColor text = button->palette().color(QPalette::HighlightedText);
+		button->setStyleSheet(QStringLiteral("QPushButton { background-color: %1; color: %2; }")
+					      .arg(highlight.name(), text.name()));
+	} else {
+		button->setStyleSheet(QString());
+	}
 }
