@@ -30,10 +30,14 @@ class ControlPanelDock;
 //   flushes to disk on save), applied to every tracked filter and remembered
 //   for any discovered later. Does not touch the main OBS replay buffer.
 //
-//   list_record_rows -> { "rows": [ { key, label, active }, ... ], "success": true }
+//   list_record_rows -> { "rows": [ { key, label, status }, ... ], "success": true }
 //   -- one row per discovered Source Record filter (see ControlPanelDock),
 //   independent of list_rows above: no "main" row here, since ControlPanelDock
 //   itself doesn't track the main OBS recording, only per-filter ones.
+//   status is 0 Inactive (parent source isn't actively capturing anything,
+//   e.g. a Window Capture with no window selected), 1 Stopped (capturing
+//   fine, record_mode off), 2 Recording, or 3 Error (record_mode was on and
+//   the output stopped with a failure).
 //   start_record_row { "key": <row key> } -> { "success": bool, "error"?: string }
 //   stop_record_row  { "key": <row key> } -> { "success": bool, "error"?: string }
 //   -- same as clicking that row's Record button in ControlPanelDock itself.

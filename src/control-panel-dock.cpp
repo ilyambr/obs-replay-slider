@@ -23,6 +23,17 @@ namespace {
 constexpr int kRecordModeNone = 0;
 constexpr int kRecordModeAlways = 1;
 
+// Mirrors ReplayRow's own 0/1/2 status-int convention (see
+// replay-buffer-dock.cpp's BuildRowsJson), extended to a 4th state: a Source
+// Record filter's parent source can itself be "there but not actually
+// capturing anything" (e.g. a Window Capture with no window selected, or a
+// Video Capture Device that's unplugged) -- distinct from "capturing fine,
+// just not recording".
+constexpr int kStatusInactive = 0;  // parent source isn't actively capturing
+constexpr int kStatusStopped = 1;   // capturing fine, record_mode off
+constexpr int kStatusRecording = 2; // actually recording right now
+constexpr int kStatusError = 3;     // record_mode was on, output stopped with a failure
+
 // Minimal JSON string escaping -- row keys/labels are plain source-derived
 // text, but escape defensively rather than assume that. Duplicated from
 // replay-buffer-dock.cpp's own (anonymous-namespace, so not shared) helper
@@ -109,7 +120,7 @@ int ControlPanelDock::AddRow(const QString &key, const QString &label, obs_weak_
 	mutedPalette.setColor(QPalette::WindowText, mutedColor);
 	row.nameLabel->setPalette(mutedPalette);
 
-	ApplyButtonState(row.recordButton, false);
+	ApplyButtonState(row.recordButton, kStatusInactive);
 
 	auto *rowLayout = new QVBoxLayout(row.container);
 	rowLayout->setSpacing(2);
@@ -126,7 +137,7 @@ int ControlPanelDock::AddRow(const QString &key, const QString &label, obs_weak_
 		const int idx = FindRowIndex(rowKey);
 		if (idx < 0)
 			return;
-		ToggleRecord(rows[idx].filterWeak, !rows[idx].recordActive);
+		ToggleRecord(rows[idx].filterWeak, rows[idx].status != kStatusRecording);
 	});
 
 	return index;
@@ -215,28 +226,44 @@ void ControlPanelDock::RefreshAll()
 		UpdateRow(row);
 }
 
+// Priority when deciding the row's status: whether the parent source is
+// actively capturing anything at all outranks everything else (a filter on a
+// Window Capture with no window selected has nothing to record regardless of
+// its own record_mode setting), then whether it's actually recording right
+// now, then whether the last attempt to record failed.
 void ControlPanelDock::UpdateRow(ControlRow &row)
 {
 	obs_source_t *strong = obs_weak_source_get_source(row.filterWeak);
 	if (!strong) {
-		ApplyButtonState(row.recordButton, false);
+		if (row.status != kStatusInactive) {
+			row.status = kStatusInactive;
+			ApplyButtonState(row.recordButton, kStatusInactive);
+		}
 		return;
 	}
 
-	bool active = false;
-	proc_handler_t *ph = obs_source_get_proc_handler(strong);
-	if (ph) {
-		calldata_t cd;
-		calldata_init(&cd);
-		if (proc_handler_call(ph, "get_record_status", &cd))
-			active = calldata_bool(&cd, "active");
-		calldata_free(&cd);
+	int status = kStatusInactive;
+	obs_source_t *parent = obs_filter_get_parent(strong); // borrowed, no release
+	if (parent && obs_source_active(parent)) {
+		bool active = false;
+		bool error = false;
+		proc_handler_t *ph = obs_source_get_proc_handler(strong);
+		if (ph) {
+			calldata_t cd;
+			calldata_init(&cd);
+			if (proc_handler_call(ph, "get_record_status", &cd)) {
+				active = calldata_bool(&cd, "active");
+				error = calldata_bool(&cd, "error");
+			}
+			calldata_free(&cd);
+		}
+		status = active ? kStatusRecording : error ? kStatusError : kStatusStopped;
 	}
 	obs_source_release(strong);
 
-	if (active != row.recordActive) {
-		row.recordActive = active;
-		ApplyButtonState(row.recordButton, active);
+	if (status != row.status) {
+		row.status = status;
+		ApplyButtonState(row.recordButton, status);
 	}
 }
 
@@ -247,9 +274,8 @@ QString ControlPanelDock::BuildRowsJson()
 		const ControlRow &row = rows[i];
 		if (i)
 			json += QLatin1Char(',');
-		json += QStringLiteral("{\"key\":\"%1\",\"label\":\"%2\",\"active\":%3}")
-				.arg(JsonEscape(row.key), JsonEscape(row.nameLabel->text()),
-				     row.recordActive ? QStringLiteral("true") : QStringLiteral("false"));
+		json += QStringLiteral("{\"key\":\"%1\",\"label\":\"%2\",\"status\":%3}")
+				.arg(JsonEscape(row.key), JsonEscape(row.nameLabel->text()), QString::number(row.status));
 	}
 	json += QStringLiteral("]}");
 	return json;
@@ -292,22 +318,27 @@ void ControlPanelDock::ToggleRecord(obs_weak_source_t *filterWeak, bool start)
 	obs_source_release(strong);
 }
 
-// "Active" is shown by highlighting the button itself -- like OBS's own
+// "Recording" is shown by highlighting the button itself -- like OBS's own
 // "Stop Recording" button when a recording is running -- rather than a
 // separate status dot. setChecked() alone would already pick up whatever
 // checked-state styling the active Qt/OBS theme applies to QPushButton, but
 // that's easy to lose track of across themes, so pin it explicitly to the
 // theme's own highlight color rather than a hardcoded blue: stays correct
-// whether OBS is in a dark, light, or fully custom theme.
-void ControlPanelDock::ApplyButtonState(QPushButton *button, bool active)
+// whether OBS is in a dark, light, or fully custom theme. Error gets its own
+// fixed warning red rather than reusing the highlight color, so a failed row
+// still reads as distinct from a recording one at a glance.
+void ControlPanelDock::ApplyButtonState(QPushButton *button, int status)
 {
-	button->setChecked(active);
-	button->setText(QString::fromUtf8(obs_module_text(active ? "StopRecord" : "StartRecord")));
-	if (active) {
+	const bool recording = status == kStatusRecording;
+	button->setChecked(recording);
+	button->setText(QString::fromUtf8(obs_module_text(recording ? "StopRecord" : "StartRecord")));
+	if (recording) {
 		const QColor highlight = button->palette().color(QPalette::Highlight);
 		const QColor text = button->palette().color(QPalette::HighlightedText);
 		button->setStyleSheet(QStringLiteral("QPushButton { background-color: %1; color: %2; }")
 					      .arg(highlight.name(), text.name()));
+	} else if (status == kStatusError) {
+		button->setStyleSheet(QStringLiteral("QPushButton { background-color: #7a1f1f; color: white; }"));
 	} else {
 		button->setStyleSheet(QString());
 	}

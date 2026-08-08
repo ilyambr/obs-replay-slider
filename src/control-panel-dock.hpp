@@ -21,7 +21,12 @@ struct ControlRow {
 	QFrame *container = nullptr; // owns everything below; the only thing added to the outer layout
 	QLabel *nameLabel = nullptr; // caption under the button, like the source's name under a native control
 	QPushButton *recordButton = nullptr;
-	bool recordActive = false; // last known state, so the button only needs restyling on change
+	// 0 Inactive (parent source isn't actively capturing anything, e.g. a
+	// Window Capture with no window selected), 1 Stopped (capturing fine,
+	// record_mode off), 2 Recording, 3 Error (record_mode was on and the
+	// output stopped with a failure). Last known value, so the button only
+	// needs restyling on an actual change.
+	int status = 0;
 };
 
 // A second, general-purpose control panel dock alongside ReplayBufferDock --
@@ -64,7 +69,7 @@ private:
 	void UpdateRow(ControlRow &row);
 	void ToggleRecord(obs_weak_source_t *filterWeak, bool start);
 
-	void ApplyButtonState(QPushButton *button, bool active);
+	void ApplyButtonState(QPushButton *button, int status);
 
 	QVBoxLayout *rowsLayout = nullptr;
 	QTimer *refreshTimer = nullptr;
