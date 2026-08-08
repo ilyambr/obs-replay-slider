@@ -226,40 +226,44 @@ void ControlPanelDock::RefreshAll()
 		UpdateRow(row);
 }
 
-// Priority when deciding the row's status: whether the parent source is
-// actively capturing anything at all outranks everything else (a filter on a
-// Window Capture with no window selected has nothing to record regardless of
-// its own record_mode setting), then whether it's actually recording right
-// now, then whether the last attempt to record failed.
+// NOTE: this used to also gate on obs_source_active(parent) to derive
+// kStatusInactive ("this source has nothing to capture", e.g. a Window
+// Capture with no window selected) -- reverted. obs_source_active() reflects
+// activate_refs, i.e. whether the source is part of the currently-showing
+// program scene tree; it has nothing to do with whether the capture device
+// itself has valid content, and a Source Record filter renders through its
+// own private obs_view regardless of whether the parent is in the active
+// scene right now -- so that check was going false (and clamping every row
+// to Inactive) for perfectly healthy, actively-recording sources any time
+// they weren't also the front-and-center program scene. There's no known
+// generic libobs signal for "this specific capture source currently has
+// valid content" -- kStatusInactive is unused for now until a reliable one
+// is found; every row is Stopped/Recording/Error same as before this was
+// attempted.
 void ControlPanelDock::UpdateRow(ControlRow &row)
 {
 	obs_source_t *strong = obs_weak_source_get_source(row.filterWeak);
 	if (!strong) {
-		if (row.status != kStatusInactive) {
-			row.status = kStatusInactive;
-			ApplyButtonState(row.recordButton, kStatusInactive);
-		}
+		row.status = kStatusInactive;
+		ApplyButtonState(row.recordButton, kStatusInactive);
 		return;
 	}
 
-	int status = kStatusInactive;
-	obs_source_t *parent = obs_filter_get_parent(strong); // borrowed, no release
-	if (parent && obs_source_active(parent)) {
-		bool active = false;
-		bool error = false;
-		proc_handler_t *ph = obs_source_get_proc_handler(strong);
-		if (ph) {
-			calldata_t cd;
-			calldata_init(&cd);
-			if (proc_handler_call(ph, "get_record_status", &cd)) {
-				active = calldata_bool(&cd, "active");
-				error = calldata_bool(&cd, "error");
-			}
-			calldata_free(&cd);
+	bool active = false;
+	bool error = false;
+	proc_handler_t *ph = obs_source_get_proc_handler(strong);
+	if (ph) {
+		calldata_t cd;
+		calldata_init(&cd);
+		if (proc_handler_call(ph, "get_record_status", &cd)) {
+			active = calldata_bool(&cd, "active");
+			error = calldata_bool(&cd, "error");
 		}
-		status = active ? kStatusRecording : error ? kStatusError : kStatusStopped;
+		calldata_free(&cd);
 	}
 	obs_source_release(strong);
+
+	const int status = active ? kStatusRecording : error ? kStatusError : kStatusStopped;
 
 	if (status != row.status) {
 		row.status = status;
