@@ -31,7 +31,7 @@ void obs_module_post_load(void)
 
 	// Must happen here, not in obs_module_load() -- obs-websocket (if present)
 	// isn't guaranteed to have registered its API yet any earlier than this.
-	WebsocketBridge::Register(dock);
+	WebsocketBridge::Register(dock, controlPanel);
 }
 
 void obs_module_unload(void)

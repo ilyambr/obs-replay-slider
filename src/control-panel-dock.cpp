@@ -22,6 +22,18 @@
 namespace {
 constexpr int kRecordModeNone = 0;
 constexpr int kRecordModeAlways = 1;
+
+// Minimal JSON string escaping -- row keys/labels are plain source-derived
+// text, but escape defensively rather than assume that. Duplicated from
+// replay-buffer-dock.cpp's own (anonymous-namespace, so not shared) helper
+// of the same name.
+QString JsonEscape(const QString &s)
+{
+	QString out = s;
+	out.replace(QLatin1Char('\\'), QStringLiteral("\\\\"));
+	out.replace(QLatin1Char('"'), QStringLiteral("\\\""));
+	return out;
+}
 } // namespace
 
 ControlPanelDock::ControlPanelDock(QWidget *parent) : QFrame(parent)
@@ -226,6 +238,39 @@ void ControlPanelDock::UpdateRow(ControlRow &row)
 		row.recordActive = active;
 		ApplyButtonState(row.recordButton, active);
 	}
+}
+
+QString ControlPanelDock::BuildRowsJson()
+{
+	QString json = QStringLiteral("{\"rows\":[");
+	for (int i = 0; i < rows.size(); i++) {
+		const ControlRow &row = rows[i];
+		if (i)
+			json += QLatin1Char(',');
+		json += QStringLiteral("{\"key\":\"%1\",\"label\":\"%2\",\"active\":%3}")
+				.arg(JsonEscape(row.key), JsonEscape(row.nameLabel->text()),
+				     row.recordActive ? QStringLiteral("true") : QStringLiteral("false"));
+	}
+	json += QStringLiteral("]}");
+	return json;
+}
+
+bool ControlPanelDock::StartRowByKey(QString key)
+{
+	const int idx = FindRowIndex(key);
+	if (idx < 0)
+		return false;
+	ToggleRecord(rows[idx].filterWeak, true);
+	return true;
+}
+
+bool ControlPanelDock::StopRowByKey(QString key)
+{
+	const int idx = FindRowIndex(key);
+	if (idx < 0)
+		return false;
+	ToggleRecord(rows[idx].filterWeak, false);
+	return true;
 }
 
 void ControlPanelDock::ToggleRecord(obs_weak_source_t *filterWeak, bool start)

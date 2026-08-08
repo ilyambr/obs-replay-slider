@@ -43,6 +43,16 @@ public:
 
 	QSize sizeHint() const override { return QSize(240, 160); }
 
+public slots:
+	// Called (only) via QMetaObject::invokeMethod(..., Qt::BlockingQueuedConnection)
+	// from WebsocketBridge, which runs on obs-websocket's own thread -- same
+	// pattern as ReplayBufferDock's BuildRowsJson/SaveRowByKey. Lets an
+	// external tool list these rows and start/stop one specific filter's
+	// recording, same as clicking its button here would.
+	QString BuildRowsJson();
+	bool StartRowByKey(QString key);
+	bool StopRowByKey(QString key);
+
 private slots:
 	void RefreshAll();
 

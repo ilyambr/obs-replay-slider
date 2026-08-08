@@ -3,12 +3,14 @@
 #include <QString>
 
 class ReplayBufferDock;
+class ControlPanelDock;
 
 // Bridges this plugin's rows (the main OBS replay buffer, plus every
 // discovered Source Record filter) to obs-websocket as a "replay-buffer-slider"
 // vendor, so an external tool can ask what buffers exist and trigger a save on
 // one specific row -- exactly what the dock's own Save buttons already do,
-// just reachable over the wire instead of only from the dock's UI.
+// just reachable over the wire instead of only from the dock's UI. Also
+// bridges ControlPanelDock's per-filter Record rows under the same vendor.
 //
 // Vendor requests:
 //   list_rows -> { "rows": [ { key, label, is_main, length_seconds, hotkey,
@@ -28,6 +30,14 @@ class ReplayBufferDock;
 //   flushes to disk on save), applied to every tracked filter and remembered
 //   for any discovered later. Does not touch the main OBS replay buffer.
 //
+//   list_record_rows -> { "rows": [ { key, label, active }, ... ], "success": true }
+//   -- one row per discovered Source Record filter (see ControlPanelDock),
+//   independent of list_rows above: no "main" row here, since ControlPanelDock
+//   itself doesn't track the main OBS recording, only per-filter ones.
+//   start_record_row { "key": <row key> } -> { "success": bool, "error"?: string }
+//   stop_record_row  { "key": <row key> } -> { "success": bool, "error"?: string }
+//   -- same as clicking that row's Record button in ControlPanelDock itself.
+//
 // Vendor event:
 //   row_saved { "key": <row key>, "path": <string> } -- emitted once a row's
 //   buffer actually finishes saving (main or filter), same moment the dock's
@@ -36,7 +46,7 @@ class ReplayBufferDock;
 // Safe no-op if obs-websocket isn't installed or hasn't loaded yet.
 namespace WebsocketBridge {
 
-void Register(ReplayBufferDock *dock);
+void Register(ReplayBufferDock *dock, ControlPanelDock *controlDock);
 void Unregister();
 
 void EmitRowSaved(const QString &rowKey, const QString &path);

@@ -1,5 +1,6 @@
 #include "websocket-bridge.hpp"
 #include "replay-buffer-dock.hpp"
+#include "control-panel-dock.hpp"
 #include "obs-websocket-api.h"
 
 #include <obs-module.h>
@@ -9,6 +10,7 @@ namespace {
 
 obs_websocket_vendor g_vendor = nullptr;
 ReplayBufferDock *g_dock = nullptr;
+ControlPanelDock *g_controlDock = nullptr;
 
 // NOTE: these run on obs-websocket's own worker thread, never on the Qt/main
 // thread -- that's what makes the Qt::BlockingQueuedConnection calls into the
@@ -107,13 +109,57 @@ void HandleSetBufferDuration(obs_data_t *request_data, obs_data_t *response_data
 		obs_data_set_string(response_data, "error", "seconds must be positive");
 }
 
+void HandleListRecordRows(obs_data_t *, obs_data_t *response_data, void *)
+{
+	QString json = QStringLiteral("{\"rows\":[]}");
+	if (g_controlDock)
+		QMetaObject::invokeMethod(g_controlDock, "BuildRowsJson", Qt::BlockingQueuedConnection, Q_RETURN_ARG(QString, json));
+
+	obs_data_t *parsed = obs_data_create_from_json(json.toUtf8().constData());
+	if (parsed) {
+		obs_data_array_t *rows = obs_data_get_array(parsed, "rows");
+		obs_data_set_array(response_data, "rows", rows);
+		if (rows)
+			obs_data_array_release(rows);
+		obs_data_release(parsed);
+	}
+	obs_data_set_bool(response_data, "success", true);
+}
+
+void HandleStartRecordRow(obs_data_t *request_data, obs_data_t *response_data, void *)
+{
+	const char *key = request_data ? obs_data_get_string(request_data, "key") : nullptr;
+	bool ok = false;
+	if (g_controlDock && key && *key) {
+		QMetaObject::invokeMethod(g_controlDock, "StartRowByKey", Qt::BlockingQueuedConnection, Q_RETURN_ARG(bool, ok),
+					  Q_ARG(QString, QString::fromUtf8(key)));
+	}
+	obs_data_set_bool(response_data, "success", ok);
+	if (!ok)
+		obs_data_set_string(response_data, "error", "unknown row key");
+}
+
+void HandleStopRecordRow(obs_data_t *request_data, obs_data_t *response_data, void *)
+{
+	const char *key = request_data ? obs_data_get_string(request_data, "key") : nullptr;
+	bool ok = false;
+	if (g_controlDock && key && *key) {
+		QMetaObject::invokeMethod(g_controlDock, "StopRowByKey", Qt::BlockingQueuedConnection, Q_RETURN_ARG(bool, ok),
+					  Q_ARG(QString, QString::fromUtf8(key)));
+	}
+	obs_data_set_bool(response_data, "success", ok);
+	if (!ok)
+		obs_data_set_string(response_data, "error", "unknown row key");
+}
+
 } // namespace
 
 namespace WebsocketBridge {
 
-void Register(ReplayBufferDock *dock)
+void Register(ReplayBufferDock *dock, ControlPanelDock *controlDock)
 {
 	g_dock = dock;
+	g_controlDock = controlDock;
 
 	// ALWAYS CALL ONLY FROM obs_module_post_load(), per obs-websocket-api.h.
 	g_vendor = obs_websocket_register_vendor("replay-buffer-slider");
@@ -129,6 +175,9 @@ void Register(ReplayBufferDock *dock)
 	obs_websocket_vendor_register_request(g_vendor, "set_dest_dir", HandleSetDestDir, nullptr);
 	obs_websocket_vendor_register_request(g_vendor, "set_row_dest_dir", HandleSetRowDestDir, nullptr);
 	obs_websocket_vendor_register_request(g_vendor, "set_buffer_duration", HandleSetBufferDuration, nullptr);
+	obs_websocket_vendor_register_request(g_vendor, "list_record_rows", HandleListRecordRows, nullptr);
+	obs_websocket_vendor_register_request(g_vendor, "start_record_row", HandleStartRecordRow, nullptr);
+	obs_websocket_vendor_register_request(g_vendor, "stop_record_row", HandleStopRecordRow, nullptr);
 }
 
 void Unregister()
@@ -140,9 +189,13 @@ void Unregister()
 		obs_websocket_vendor_unregister_request(g_vendor, "set_dest_dir");
 		obs_websocket_vendor_unregister_request(g_vendor, "set_row_dest_dir");
 		obs_websocket_vendor_unregister_request(g_vendor, "set_buffer_duration");
+		obs_websocket_vendor_unregister_request(g_vendor, "list_record_rows");
+		obs_websocket_vendor_unregister_request(g_vendor, "start_record_row");
+		obs_websocket_vendor_unregister_request(g_vendor, "stop_record_row");
 	}
 	g_vendor = nullptr;
 	g_dock = nullptr;
+	g_controlDock = nullptr;
 }
 
 void EmitRowSaved(const QString &rowKey, const QString &path)
