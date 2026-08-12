@@ -219,8 +219,20 @@ std::string TrimReplayToLastSeconds(const std::string &path, int seconds, const 
 		out.openedFile = true;
 	}
 
-	if (avformat_write_header(out.ctx, nullptr) < 0)
+	if (avformat_write_header(out.ctx, nullptr) < 0) {
+		// avio_open above already created tempPath on disk (out.openedFile is
+		// true) -- OutputGuard's destructor closes the AVIOContext but was
+		// never told to remove() the file it created, unlike the packet-loop
+		// failure path below. Close the handle first (an open handle from
+		// this same process can make even our own later remove() fail on
+		// Windows, same reasoning as ReplaceFile's own comment).
+		if (out.openedFile && out.ctx->pb) {
+			avio_closep(&out.ctx->pb);
+			out.openedFile = false;
+		}
+		remove(tempPath.c_str());
 		return std::string();
+	}
 
 	// Every stream shares ONE reference point -- the real seek target (in
 	// AV_TIME_BASE units), converted into each stream's own time_base --
@@ -255,15 +267,23 @@ std::string TrimReplayToLastSeconds(const std::string &path, int seconds, const 
 		AVStream *inStream = in.ctx->streams[inIdx];
 		AVStream *outStream = out.ctx->streams[streamMapping[inIdx]];
 
-		if (pkt.pts != AV_NOPTS_VALUE)
+		// The NOPTS guard has to cover the rescale too, not just the offset
+		// subtraction -- av_rescale_q_rnd doesn't know AV_NOPTS_VALUE
+		// (INT64_MIN) is a sentinel, not a real timestamp, and will happily
+		// "rescale" it into some large-magnitude garbage value, silently
+		// destroying the "no timestamp" information a legitimately
+		// NOPTS packet (dts-less audio, some passthrough containers) relies
+		// on downstream muxers/readers to respect.
+		if (pkt.pts != AV_NOPTS_VALUE) {
 			pkt.pts = std::max<int64_t>(0, pkt.pts - offset[inIdx]);
-		if (pkt.dts != AV_NOPTS_VALUE)
+			pkt.pts = av_rescale_q_rnd(pkt.pts, inStream->time_base, outStream->time_base,
+						  static_cast<AVRounding>(AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX));
+		}
+		if (pkt.dts != AV_NOPTS_VALUE) {
 			pkt.dts = std::max<int64_t>(0, pkt.dts - offset[inIdx]);
-
-		pkt.pts = av_rescale_q_rnd(pkt.pts, inStream->time_base, outStream->time_base,
-					  static_cast<AVRounding>(AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX));
-		pkt.dts = av_rescale_q_rnd(pkt.dts, inStream->time_base, outStream->time_base,
-					  static_cast<AVRounding>(AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX));
+			pkt.dts = av_rescale_q_rnd(pkt.dts, inStream->time_base, outStream->time_base,
+						  static_cast<AVRounding>(AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX));
+		}
 		pkt.duration = av_rescale_q(pkt.duration, inStream->time_base, outStream->time_base);
 		pkt.pos = -1;
 		pkt.stream_index = streamMapping[inIdx];
