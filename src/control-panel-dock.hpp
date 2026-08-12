@@ -28,6 +28,11 @@ struct ControlRow {
 	// needs restyling on an actual change.
 	int status = 0;
 	QString lastOutputPath;
+	// This filter's "source_record.StartRecording" hotkey, from
+	// get_record_status's own "hotkey" field -- see ReplayBufferDock's
+	// identically-shaped ReplayRow::hotkeyLabel/get_replay_buffer_status.
+	// Empty means unbound (or not yet queried).
+	QString lastHotkey;
 };
 
 // A second, general-purpose control panel dock alongside ReplayBufferDock --
