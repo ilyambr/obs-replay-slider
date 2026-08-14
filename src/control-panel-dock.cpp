@@ -237,13 +237,26 @@ void ControlPanelDock::RefreshAll()
 // to Inactive) for perfectly healthy, actively-recording sources any time
 // they weren't also the front-and-center program scene. There's no known
 // generic libobs signal for "this specific capture source currently has
-// valid content" -- kStatusInactive is unused for now until a reliable one
-// is found; every row is Stopped/Recording/Error same as before this was
-// attempted.
+// valid content" -- so THAT specific case is still unhandled.
+//
+// obs_source_enabled(parent) is a different, narrower signal added later:
+// the literal Sources-list eye-icon toggle, which has nothing to do with
+// scene membership (a source can be enabled but not in the active scene, or
+// disabled but still in it) -- so it doesn't have the false-positive problem
+// that sank obs_source_active() above. A disabled parent genuinely can't be
+// capturing anything real regardless of what get_record_status below says.
 void ControlPanelDock::UpdateRow(ControlRow &row)
 {
 	obs_source_t *strong = obs_weak_source_get_source(row.filterWeak);
 	if (!strong) {
+		row.status = kStatusInactive;
+		ApplyButtonState(row.recordButton, kStatusInactive);
+		return;
+	}
+
+	obs_source_t *parent = obs_filter_get_parent(strong); // borrowed, no release
+	if (parent && !obs_source_enabled(parent)) {
+		obs_source_release(strong);
 		row.status = kStatusInactive;
 		ApplyButtonState(row.recordButton, kStatusInactive);
 		return;
