@@ -228,23 +228,32 @@ void ControlPanelDock::RefreshAll()
 
 // NOTE: this used to also gate on obs_source_active(parent) to derive
 // kStatusInactive ("this source has nothing to capture", e.g. a Window
-// Capture with no window selected) -- reverted. obs_source_active() reflects
-// activate_refs, i.e. whether the source is part of the currently-showing
-// program scene tree; it has nothing to do with whether the capture device
-// itself has valid content, and a Source Record filter renders through its
-// own private obs_view regardless of whether the parent is in the active
-// scene right now -- so that check was going false (and clamping every row
-// to Inactive) for perfectly healthy, actively-recording sources any time
-// they weren't also the front-and-center program scene. There's no known
-// generic libobs signal for "this specific capture source currently has
-// valid content" -- so THAT specific case is still unhandled.
+// Capture with no window selected, or hidden via its scene's eye icon) --
+// reverted. obs_source_active() reflects activate_refs, i.e. whether the
+// source is part of the currently-showing program scene tree; it has
+// nothing to do with whether the capture device itself has valid content,
+// and a Source Record filter forces obs_source_inc_showing() on its parent
+// to keep it producing real frames regardless of scene state -- so that
+// check was going false (and clamping every row to Inactive) for perfectly
+// healthy, actively-recording sources any time they weren't also the
+// front-and-center program scene.
 //
-// obs_source_enabled(parent) is a different, narrower signal added later:
-// the literal Sources-list eye-icon toggle, which has nothing to do with
-// scene membership (a source can be enabled but not in the active scene, or
-// disabled but still in it) -- so it doesn't have the false-positive problem
-// that sank obs_source_active() above. A disabled parent genuinely can't be
-// capturing anything real regardless of what get_record_status below says.
+// A later attempt tried obs_source_enabled(parent) instead (the Sources
+// list' own separate enable/deactivate toggle) -- kept below, since it's a
+// real, narrow signal with no false-positive problem of its own, but it
+// doesn't cover the actual common case: hiding a source via its EYE icon in
+// a scene is a per-scene-ITEM visibility flag (obs_sceneitem_visible), not
+// a source-level one at all, so obs_source_enabled() stays true regardless.
+//
+// The "hidden" field below is the real fix for that: obs-source-record
+// already computes exactly this signal correctly (its own
+// source_hidden_in_current_scene(), used to auto-pause recording while
+// hidden -- see that repo's source-record.c) by checking scene-item
+// visibility specifically within the CURRENT program scene, recursively,
+// which is what avoids obs_source_active()'s false positive above (a
+// source in some OTHER, non-front scene isn't "hidden", it's just
+// elsewhere). get_record_status now exposes that same already-correct
+// computation instead of this dock trying to re-derive it independently.
 void ControlPanelDock::UpdateRow(ControlRow &row)
 {
 	obs_source_t *strong = obs_weak_source_get_source(row.filterWeak);
@@ -264,6 +273,7 @@ void ControlPanelDock::UpdateRow(ControlRow &row)
 
 	bool active = false;
 	bool error = false;
+	bool hidden = false;
 	QString path;
 	QString hotkey;
 	proc_handler_t *ph = obs_source_get_proc_handler(strong);
@@ -273,6 +283,11 @@ void ControlPanelDock::UpdateRow(ControlRow &row)
 		if (proc_handler_call(ph, "get_record_status", &cd)) {
 			active = calldata_bool(&cd, "active");
 			error = calldata_bool(&cd, "error");
+			// Older obs-source-record builds without this field simply
+			// leave the calldata slot unset, which calldata_bool already
+			// defaults to false for -- degrades to the pre-existing
+			// Stopped/Recording/Error-only behavior on those, not a crash.
+			hidden = calldata_bool(&cd, "hidden");
 			const char *pathStr = calldata_string(&cd, "path");
 			if (pathStr)
 				path = QString::fromUtf8(pathStr);
@@ -287,7 +302,7 @@ void ControlPanelDock::UpdateRow(ControlRow &row)
 	row.lastOutputPath = path;
 	row.lastHotkey = hotkey;
 
-	const int status = active ? kStatusRecording : error ? kStatusError : kStatusStopped;
+	const int status = hidden ? kStatusInactive : active ? kStatusRecording : error ? kStatusError : kStatusStopped;
 
 	if (status != row.status) {
 		row.status = status;
