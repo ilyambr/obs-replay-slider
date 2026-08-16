@@ -26,13 +26,28 @@ constexpr int kRecordModeAlways = 1;
 // Mirrors ReplayRow's own 0/1/2 status-int convention (see
 // replay-buffer-dock.cpp's BuildRowsJson), extended to a 4th state: a Source
 // Record filter's parent source can itself be "there but not actually
-// capturing anything" (e.g. a Window Capture with no window selected, or a
-// Video Capture Device that's unplugged) -- distinct from "capturing fine,
-// just not recording".
+// capturing anything" -- distinct from "capturing fine, just not recording".
+// kStatusInactive is the per-scene-item/source-level signal (hidden via the
+// eye icon, or the source itself disabled) -- see UpdateRow's own comment on
+// why that's derived from "hidden"/obs_source_enabled specifically, not
+// obs_source_active(). kStatusNoSignal is a DIFFERENT case this used to not
+// detect at all (falling through to plain kStatusStopped instead, which
+// reads as "clicking Start would do something"): the source is fully
+// visible and enabled, but the underlying device genuinely has nothing to
+// capture right now -- a Window Capture with no window selected, a Video
+// Capture Device that's unplugged, a Game Capture with nothing hooked.
+// Clicking Start on a row in this state used to silently arm
+// record_mode=Always (see ToggleRecord's own comment) and then immediately
+// look like it failed once the next status poll showed nothing actually
+// recording -- confusing, not broken. Kept as its own status distinct from
+// kStatusInactive (rather than merged into it) so the button/label can say
+// WHY it's disabled instead of a plain "Inactive" that doesn't distinguish
+// "hidden" from "no signal".
 constexpr int kStatusInactive = 0;  // parent source isn't actively capturing
 constexpr int kStatusStopped = 1;   // capturing fine, record_mode off
 constexpr int kStatusRecording = 2; // actually recording right now
 constexpr int kStatusError = 3;     // record_mode was on, output stopped with a failure
+constexpr int kStatusNoSignal = 4;  // visible/enabled, but the device has no signal (0x0) right now
 
 // Minimal JSON string escaping -- row keys/labels are plain source-derived
 // text, but escape defensively rather than assume that. Duplicated from
@@ -274,6 +289,7 @@ void ControlPanelDock::UpdateRow(ControlRow &row)
 	bool active = false;
 	bool error = false;
 	bool hidden = false;
+	bool noSignal = false;
 	QString path;
 	QString hotkey;
 	proc_handler_t *ph = obs_source_get_proc_handler(strong);
@@ -283,11 +299,12 @@ void ControlPanelDock::UpdateRow(ControlRow &row)
 		if (proc_handler_call(ph, "get_record_status", &cd)) {
 			active = calldata_bool(&cd, "active");
 			error = calldata_bool(&cd, "error");
-			// Older obs-source-record builds without this field simply
+			// Older obs-source-record builds without these fields simply
 			// leave the calldata slot unset, which calldata_bool already
 			// defaults to false for -- degrades to the pre-existing
 			// Stopped/Recording/Error-only behavior on those, not a crash.
 			hidden = calldata_bool(&cd, "hidden");
+			noSignal = calldata_bool(&cd, "no_signal");
 			const char *pathStr = calldata_string(&cd, "path");
 			if (pathStr)
 				path = QString::fromUtf8(pathStr);
@@ -302,7 +319,15 @@ void ControlPanelDock::UpdateRow(ControlRow &row)
 	row.lastOutputPath = path;
 	row.lastHotkey = hotkey;
 
-	const int status = hidden ? kStatusInactive : active ? kStatusRecording : error ? kStatusError : kStatusStopped;
+	// hidden takes priority over noSignal when (rarely) both are somehow
+	// true at once -- hidden is the stronger "this row can't do anything at
+	// all right now" signal (a whole scene-item visibility toggle), while
+	// noSignal is specifically about the device/capture content.
+	const int status = hidden          ? kStatusInactive
+			    : noSignal      ? kStatusNoSignal
+			    : active        ? kStatusRecording
+			    : error         ? kStatusError
+					    : kStatusStopped;
 
 	if (status != row.status) {
 		row.status = status;
