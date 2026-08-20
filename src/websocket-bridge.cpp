@@ -198,6 +198,16 @@ void Unregister()
 	g_controlDock = nullptr;
 }
 
+void EmitRowSaving(const QString &rowKey)
+{
+	if (!g_vendor)
+		return;
+	obs_data_t *data = obs_data_create();
+	obs_data_set_string(data, "key", rowKey.toUtf8().constData());
+	obs_websocket_vendor_emit_event(g_vendor, "row_saving", data);
+	obs_data_release(data);
+}
+
 void EmitRowSaved(const QString &rowKey, const QString &path)
 {
 	if (!g_vendor)

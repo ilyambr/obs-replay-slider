@@ -46,10 +46,21 @@ class ControlPanelDock;
 //   stop_record_row  { "key": <row key> } -> { "success": bool, "error"?: string }
 //   -- same as clicking that row's Record button in ControlPanelDock itself.
 //
-// Vendor event:
+// Vendor events:
+//   row_saving { "key": <row key> } -- emitted the instant OBS itself reports
+//   a row's raw (untrimmed) replay buffer file has landed on disk, right
+//   before TrimAndReplace's own background trim thread starts -- fires
+//   regardless of what triggered the save (this dock's own Save button, a
+//   hotkey bound directly in OBS, or a save_row request), since all three
+//   paths funnel through the exact same OBS signal handler. There is no
+//   equivalent "about to start" moment before THIS -- the raw file genuinely
+//   doesn't exist yet before it, so there's nothing earlier to announce.
 //   row_saved { "key": <row key>, "path": <string> } -- emitted once a row's
-//   buffer actually finishes saving (main or filter), same moment the dock's
-//   own status bar message / trim kicks in.
+//   buffer actually finishes saving (main or filter) -- i.e. once the trim
+//   above completes -- same moment the dock's own status bar message kicks
+//   in. Every row_saving is followed by exactly one row_saved for that same
+//   key, whether or not the trim itself succeeded (see TrimAndReplace's own
+//   comment on the trim-failure fallback).
 //
 // Safe no-op if obs-websocket isn't installed or hasn't loaded yet.
 namespace WebsocketBridge {
@@ -57,6 +68,7 @@ namespace WebsocketBridge {
 void Register(ReplayBufferDock *dock, ControlPanelDock *controlDock);
 void Unregister();
 
+void EmitRowSaving(const QString &rowKey);
 void EmitRowSaved(const QString &rowKey, const QString &path);
 
 } // namespace WebsocketBridge

@@ -224,6 +224,15 @@ void ReplayBufferDock::NotifyFilterReplaySaved(QString rowKey, QString path)
 
 void ReplayBufferDock::TrimAndReplace(const QString &rowKey, bool isMain, const QString &path, int seconds)
 {
+	// Fires here specifically, not at whatever UI/hotkey/websocket action
+	// requested the save -- this is the first moment ANY of those three
+	// paths actually converge (OBS itself just reported the raw file is on
+	// disk), so it's the one place that covers all of them without
+	// duplicating this call at each individual trigger site. See
+	// websocket-bridge.hpp's own comment on why there's nothing earlier to
+	// announce.
+	WebsocketBridge::EmitRowSaving(rowKey);
+
 	const int idx = FindRowIndex(rowKey, isMain);
 	const QString &effectiveDestDir = (idx >= 0 && !rows[idx].rowDestDir.isEmpty()) ? rows[idx].rowDestDir : destDir;
 
